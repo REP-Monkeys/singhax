@@ -1,6 +1,6 @@
 """Claim model."""
 
-from sqlalchemy import Column, String, ForeignKey, Numeric
+from sqlalchemy import Column, String, ForeignKey, Numeric, DateTime
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func

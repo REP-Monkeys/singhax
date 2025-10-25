@@ -15,9 +15,5 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- VALUES ('demo@example.com', 'Demo User', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4U.8F7hB2u')
 -- ON CONFLICT (email) DO NOTHING;
 
--- Create sample RAG documents for policy sections
-INSERT INTO rag_documents (title, insurer_name, product_code, section_id, heading, text, citations, embedding) VALUES
-('Comprehensive Travel Insurance', 'Demo Insurer', 'COMP_TRAVEL', '1.1', 'Coverage Overview', 'This policy provides comprehensive travel insurance coverage for medical expenses, trip cancellation, and baggage protection.', '{"section": "1.1", "page": 1}', '[0.1, 0.2, 0.3]'::vector),
-('Comprehensive Travel Insurance', 'Demo Insurer', 'COMP_TRAVEL', '2.1', 'Medical Coverage', 'Medical expenses are covered up to $100,000 for emergency treatment during your trip.', '{"section": "2.1", "page": 5}', '[0.2, 0.3, 0.4]'::vector),
-('Comprehensive Travel Insurance', 'Demo Insurer', 'COMP_TRAVEL', '3.1', 'Trip Cancellation', 'Trip cancellation coverage applies when you need to cancel your trip due to covered reasons such as illness or death.', '{"section": "3.1", "page": 10}', '[0.3, 0.4, 0.5]'::vector)
-ON CONFLICT DO NOTHING;
+-- Sample data will be loaded via database migrations and seed scripts
+-- This ensures tables exist before inserting data

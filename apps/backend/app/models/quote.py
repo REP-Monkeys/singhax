@@ -1,6 +1,6 @@
 """Quote model."""
 
-from sqlalchemy import Column, String, ForeignKey, Enum, Numeric
+from sqlalchemy import Column, String, ForeignKey, Enum, Numeric, DateTime
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func

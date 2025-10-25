@@ -1,6 +1,6 @@
 """Policy model."""
 
-from sqlalchemy import Column, String, Date, ForeignKey, Enum, Integer
+from sqlalchemy import Column, String, Date, ForeignKey, Enum, Integer, DateTime
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func

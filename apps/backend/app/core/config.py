@@ -14,9 +14,14 @@ class Settings(BaseSettings):
     version: str = "1.0.0"
     description: str = "Conversational travel insurance quoting and claims platform"
     
-    # Database
+    # Database - Supabase
     database_url: str = "postgresql://postgres:password@localhost:5432/convo_travel_insure"
     database_test_url: str = "postgresql://postgres:password@localhost:5432/convo_travel_insure_test"
+    
+    # Supabase Configuration
+    supabase_url: Optional[str] = None
+    supabase_anon_key: Optional[str] = None
+    supabase_service_role_key: Optional[str] = None
     
     # Security
     secret_key: str = "your-secret-key-change-in-production"

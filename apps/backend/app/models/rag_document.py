@@ -1,7 +1,8 @@
 """RAG document model for policy sections and embeddings."""
 
-from sqlalchemy import Column, String, Text, Integer
+from sqlalchemy import Column, String, Text, Integer, DateTime
 from sqlalchemy.dialects.postgresql import UUID, JSONB
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.sql import func
 import uuid
 
@@ -27,7 +28,7 @@ class RagDocument(Base):
     citations = Column(JSONB, nullable=True)  # Reference citations
     
     # Vector embedding (pgvector)
-    embedding = Column("embedding", type_="vector(1536)")  # OpenAI embedding dimension
+    embedding = Column(Vector(1536))  # OpenAI embedding dimension
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
