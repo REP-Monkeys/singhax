@@ -47,9 +47,13 @@ class Settings(BaseSettings):
     debug: bool = False
     environment: str = "development"
     
+    # Frontend Configuration (optional)
+    next_public_api_url: Optional[str] = None
+    
     class Config:
-        env_file = ".env"
+        env_file = "../../.env"  # Look for .env in project root
         case_sensitive = False
+        extra = "ignore"  # Ignore extra fields from .env
 
 
 # Global settings instance
