@@ -561,10 +561,12 @@ Is this information correct? (yes/no)"""
     # Configure checkpointing for conversation persistence
     try:
         from langgraph.checkpoint.postgres import PostgresSaver
-        checkpointer = PostgresSaver.from_conn_string(
-            settings.langgraph_checkpoint_db or settings.database_url
-        )
-        return graph.compile(checkpointer=checkpointer)
+        # Create checkpointer with proper connection handling
+        conn_string = settings.langgraph_checkpoint_db or settings.database_url
+        with PostgresSaver.from_conn_string(conn_string) as checkpointer:
+            # Setup tables if needed
+            checkpointer.setup()
+            return graph.compile(checkpointer=checkpointer)
     except Exception as e:
         # Fallback if checkpoint package not installed or connection fails
         print(f"Warning: LangGraph checkpointing not available - {e}")

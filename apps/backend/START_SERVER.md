@@ -48,7 +48,7 @@ Open browser: http://localhost:8000/docs
 If DNS keeps failing, try using the IPv6 address directly in `.env`:
 
 ```bash
-DATABASE_URL=postgresql://postgres:yuexincarryus@[2406:da18:243:741d:b5be:f007:48d9:1179]:5432/postgres
+DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@[YOUR-IPV6-ADDRESS]:5432/postgres
 ```
 
 ### C) Network Troubleshooting
