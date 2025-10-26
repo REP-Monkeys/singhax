@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     
     class Config:
-        env_file = ".env"
+        env_file = "../../.env"  # Look in project root
         case_sensitive = False
 
 

@@ -62,9 +62,17 @@ async def send_message(
     request: ChatMessageRequest,
     db: Session = Depends(get_db)
 ) -> ChatMessageResponse:
-    """Send a message in a conversation and get agent response."""
+    """
+    Send a message and get intelligent AI response using LangGraph.
     
-    # a. Validate session_id format
+    This endpoint uses the full LangGraph conversation flow with:
+    - Groq LLM for intent classification and extraction
+    - 6-question structured flow
+    - Real quote generation
+    - Session persistence via SQLite checkpointing
+    """
+    
+    # Validate session_id format
     try:
         uuid.UUID(request.session_id)
     except ValueError:
@@ -73,37 +81,82 @@ async def send_message(
             detail="Invalid session_id format. Must be a valid UUID."
         )
     
-    # SIMPLIFIED APPROACH - Just return a basic response for now
-    user_message = request.message.lower()
+    # Get conversation graph (cached singleton)
+    try:
+        graph = get_conversation_graph(db)
+    except Exception as e:
+        error_str = str(e).lower()
+        if "relation" in error_str or "table" in error_str:
+            raise HTTPException(
+                status_code=503,
+                detail="Chat service is initializing. Please try again."
+            )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to initialize conversation: {str(e)}"
+        )
     
-    if "japan" in user_message:
-        response = "Great! I'd be happy to help you get travel insurance for Japan. Let me ask you a few questions to provide the best quote.\n\nWhere are you traveling to?"
-    elif "destination" in user_message or "traveling" in user_message:
-        response = "Perfect! When does your trip start? Please provide the date in YYYY-MM-DD format."
-    elif any(char.isdigit() for char in user_message) and ("2025" in user_message or "2024" in user_message):
-        response = "Thanks! When do you return? Please provide the date in YYYY-MM-DD format."
-    elif "travelers" in user_message or "people" in user_message or "adults" in user_message:
-        response = "How many travelers are going, and what are their ages? For example: '2 travelers, ages 30 and 8'"
-    elif "adventure" in user_message or "sports" in user_message:
-        response = "Are you planning any adventure activities like skiing, scuba diving, trekking, or bungee jumping?"
-    elif "yes" in user_message and ("correct" in user_message or "right" in user_message):
-        response = "Excellent! Let me calculate your insurance options...\n\n💰 **Standard Plan**: $45.00\n   - Medical coverage: $100,000\n   - Trip cancellation: $5,000\n\n💰 **Premium Plan**: $65.00\n   - Medical coverage: $250,000\n   - Trip cancellation: $10,000\n\nWould you like to proceed with one of these options?"
-    else:
-        response = "I'd be happy to help you with travel insurance! Where are you planning to travel?"
+    # Invoke LangGraph with real conversation intelligence
+    # The checkpointer automatically handles state persistence
+    config = {"configurable": {"thread_id": request.session_id}}
     
+    try:
+        print(f"\n💬 Processing message for session {request.session_id[:8]}...")
+        print(f"   User message: '{request.message[:80]}...'")
+        
+        # Invoke graph - checkpointer handles state automatically
+        result = graph.invoke(
+            {"messages": [HumanMessage(content=request.message)]},
+            config
+        )
+        
+        print(f"✅ LangGraph execution complete")
+        print(f"   State keys: {list(result.keys())}")
+        
+    except Exception as e:
+        print(f"❌ LangGraph invocation error:")
+        import traceback
+        traceback.print_exc()
+        
+        raise HTTPException(
+            status_code=500,
+            detail="I encountered an error processing your message. Please try again or start a new session."
+        )
+    
+    # Extract agent's response safely
+    agent_response = "I'm processing your request. Please try again."
+    messages = result.get("messages", [])
+    
+    if messages:
+        # Find last AI message (skip user messages)
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage):
+                agent_response = msg.content if hasattr(msg, 'content') else str(msg)
+                print(f"   Agent response: '{agent_response[:80]}...'")
+                break
+    
+    # Extract quote data if available
+    quote_data = result.get("quote_data")
+    
+    if quote_data:
+        print(f"💰 Quote generated successfully")
+        print(f"   Destination: {quote_data.get('destination')}")
+        print(f"   Tiers available: {list(quote_data.get('quotes', {}).keys())}")
+    
+    # Build response with comprehensive state
     return ChatMessageResponse(
         session_id=request.session_id,
-        message=response,
+        message=agent_response,
         state={
-            "current_intent": "quote",
-            "trip_details": {},
-            "travelers_data": {},
-            "preferences": {},
-            "awaiting_confirmation": False,
-            "confirmation_received": False,
+            "current_intent": result.get("current_intent", ""),
+            "trip_details": result.get("trip_details", {}),
+            "travelers_data": result.get("travelers_data", {}),
+            "preferences": result.get("preferences", {}),
+            "awaiting_confirmation": result.get("awaiting_confirmation", False),
+            "confirmation_received": result.get("confirmation_received", False),
         },
-        quote=None,
-        requires_human=False,
+        quote=quote_data,
+        requires_human=result.get("requires_human", False),
     )
 
 

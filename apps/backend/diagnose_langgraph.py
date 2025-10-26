@@ -28,34 +28,39 @@ except ImportError as e:
 # Test 2: Check database connection
 print("\n2. Checking database connection...")
 try:
-    from sqlalchemy import text
-    db = SessionLocal()
-    result = db.execute(text("SELECT 1")).fetchone()
+    import psycopg2
+    conn_string = settings.langgraph_checkpoint_db or settings.database_url
+    conn = psycopg2.connect(conn_string)
+    conn.close()
     print(f"   ✅ Database connected")
     print(f"   ✅ Database URL: {settings.database_url[:50]}...")
-    db.close()
 except Exception as e:
     print(f"   ❌ Database connection failed: {e}")
     sys.exit(1)
 
-# Test 3: Create checkpointer
-print("\n3. Testing PostgresSaver...")
+# Test 3: Test SQLite checkpointer
+print("\n3. Testing SQLite checkpointer...")
 try:
-    conn_string = settings.langgraph_checkpoint_db or settings.database_url
-    with PostgresSaver.from_conn_string(conn_string) as checkpointer:
-        print("   ✅ PostgresSaver created")
-        
-        # Try to setup tables (may fail if already exist)
-        try:
-            checkpointer.setup()
-            print("   ✅ Checkpoint tables created/verified in database")
-        except Exception as setup_error:
-            if "already exists" in str(setup_error) or "prepared statement" in str(setup_error):
-                print("   ✅ Checkpoint tables already exist (setup skipped)")
-            else:
-                raise setup_error
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    import tempfile
+    
+    # Create temporary checkpoint file
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+        checkpoint_path = tmp.name
+    
+    # Use SQLite checkpointer with context manager
+    with SqliteSaver.from_conn_string(checkpoint_path) as checkpointer:
+        checkpointer.setup()
+    
+    print("   ✅ SQLite checkpointer created")
+    print("   ✅ Checkpoint tables created successfully")
+    
+    # Cleanup
+    import os
+    os.remove(checkpoint_path)
+    
 except Exception as e:
-    print(f"   ❌ PostgresSaver failed: {e}")
+    print(f"   ❌ SQLite checkpointer failed: {e}")
     print("\nFull error:")
     import traceback
     traceback.print_exc()

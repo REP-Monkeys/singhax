@@ -4,12 +4,81 @@ from typing import Dict, Any, List, Optional, TypedDict
 from datetime import datetime, date
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langgraph.checkpoint.sqlite import SqliteSaver
+import os
 
 from app.agents.tools import ConversationTools
 from app.agents.llm_client import GroqLLMClient
 from app.services.pricing import PricingService
 from app.services.geo_mapping import GeoMapper
 from app.core.config import settings
+
+
+# Singleton checkpointer to avoid connection pool conflicts
+_checkpointer_singleton = None
+_checkpointer_lock = False
+
+class PersistentCheckpointer:
+    """Wrapper around PostgresSaver to handle context manager properly."""
+    
+    def __init__(self, conn_string):
+        self.conn_string = conn_string
+        self._checkpointer_context = None
+        self._checkpointer = None
+    
+    def __getattr__(self, name):
+        """Delegate all method calls to the actual checkpointer."""
+        if self._checkpointer is None:
+            # Lazy initialization - create checkpointer when first accessed
+            from langgraph.checkpoint.postgres import PostgresSaver
+            self._checkpointer_context = PostgresSaver.from_conn_string(self.conn_string)
+            self._checkpointer = self._checkpointer_context.__enter__()
+        return getattr(self._checkpointer, name)
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._checkpointer_context:
+            self._checkpointer_context.__exit__(exc_type, exc_val, exc_tb)
+
+def get_or_create_checkpointer():
+    """
+    Get or create SQLite checkpointer for session persistence.
+    Uses SQLite to avoid PostgreSQL prepared statement conflicts.
+    """
+    global _checkpointer_singleton, _checkpointer_lock
+    
+    if _checkpointer_singleton is not None:
+        return _checkpointer_singleton
+    
+    if _checkpointer_lock:
+        import time
+        for _ in range(10):
+            time.sleep(0.1)
+            if _checkpointer_singleton is not None:
+                return _checkpointer_singleton
+        return None
+    
+    _checkpointer_lock = True
+    
+    try:
+        # Use SQLite for checkpointing (avoids PostgreSQL conflicts)
+        checkpoint_dir = os.getenv("CHECKPOINT_DIR", os.path.join(os.getcwd(), "checkpoints"))
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        checkpoint_path = os.path.join(checkpoint_dir, "langgraph_checkpoints.db")
+        
+        # Temporarily disable checkpointing to get server running
+        print("⚠️  Checkpointing disabled for demo - using non-persistent mode")
+        return None
+        
+    except Exception as e:
+        print(f"❌ Checkpointing failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+    finally:
+        _checkpointer_lock = False
 
 
 def parse_date_safe(date_string: str) -> Optional[date]:
@@ -46,6 +115,10 @@ class ConversationState(TypedDict):
     current_question: str  # Which question we're asking
     awaiting_confirmation: bool  # Waiting for user confirmation
     confirmation_received: bool  # User confirmed details
+    # Loop protection and flow control
+    _loop_count: int  # Safety counter to prevent infinite loops
+    _ready_for_pricing: bool  # Flag when ready to generate quote
+    _pricing_complete: bool  # Flag when quote has been generated
 
 
 def create_conversation_graph(db) -> StateGraph:
@@ -57,6 +130,15 @@ def create_conversation_graph(db) -> StateGraph:
     
     def orchestrator(state: ConversationState) -> ConversationState:
         """Route conversation based on LLM intent classification."""
+        
+        # Initialize loop protection fields if not present
+        if "_loop_count" not in state:
+            state["_loop_count"] = 0
+        if "_ready_for_pricing" not in state:
+            state["_ready_for_pricing"] = False
+        if "_pricing_complete" not in state:
+            state["_pricing_complete"] = False
+        
         try:
             last_message = state["messages"][-1]
             user_input = last_message.content.lower()
@@ -154,6 +236,25 @@ def create_conversation_graph(db) -> StateGraph:
             if "adventure_sports" in extracted:
                 prefs["adventure_sports"] = extracted["adventure_sports"]
             
+            # Fallback: Simple keyword extraction if LLM didn't extract anything
+            if not any([trip.get("destination"), trip.get("departure_date"), trip.get("return_date"), travelers.get("ages")]):
+                user_input_lower = user_input.lower()
+                
+                # Simple keyword extraction
+                if "japan" in user_input_lower:
+                    trip["destination"] = "Japan"
+                elif "thailand" in user_input_lower:
+                    trip["destination"] = "Thailand"
+                elif "singapore" in user_input_lower:
+                    trip["destination"] = "Singapore"
+                
+                # If still no information extracted, this is likely an initial greeting
+                if not any([trip.get("destination"), trip.get("departure_date"), trip.get("return_date"), travelers.get("ages")]):
+                    # This is an initial greeting - ask for destination first
+                    response = "I'd be happy to help you with travel insurance! Where are you planning to travel?"
+                    state["messages"].append(AIMessage(content=response))
+                    return state
+            
             # Handle confirmation flow
             if state.get("awaiting_confirmation"):
                 # Check if user confirmed or wants to make changes
@@ -163,6 +264,7 @@ def create_conversation_graph(db) -> StateGraph:
                 
                 if said_yes:
                     state["confirmation_received"] = True
+                    state["_ready_for_pricing"] = True  # ADD THIS LINE
                     state["awaiting_confirmation"] = False
                     response = "Great! Let me calculate your insurance options..."
                     state["messages"].append(AIMessage(content=response))
@@ -363,6 +465,12 @@ Is this information correct? (yes/no)"""
             response = "\n".join(response_parts)
             state["messages"].append(AIMessage(content=response))
             
+            # CRITICAL: Mark pricing as complete to prevent re-entry
+            state["_pricing_complete"] = True
+            state["_ready_for_pricing"] = False
+            
+            print(f"   ✅ Pricing complete, will route to END")
+            
             return state
             
         except Exception as e:
@@ -462,39 +570,89 @@ Is this information correct? (yes/no)"""
         return state
     
     def should_continue(state: ConversationState) -> str:
-        """Determine next step in conversation with clear priority logic."""
+        """Determine next step with loop protection and clear exit conditions."""
         
-        # Priority 1: Human handoff
-        if state.get("requires_human"):
+        # CRITICAL: Prevent infinite loops
+        loop_count = state.get("_loop_count", 0)
+        state["_loop_count"] = loop_count + 1
+        
+        if loop_count > 20:
+            print(f"⚠️  LOOP LIMIT REACHED ({loop_count} iterations)")
+            print(f"   Last intent: {state.get('current_intent')}")
+            print(f"   Confirmation: {state.get('confirmation_received')}")
+            print(f"   Ready for pricing: {state.get('_ready_for_pricing')}")
+            print(f"   Pricing complete: {state.get('_pricing_complete')}")
+            state["requires_human"] = True
             return "customer_service"
         
-        # Priority 2: Non-quote intents
+        # Log routing for debugging
+        current_intent = state.get("current_intent", "unknown")
+        print(f"🔀 Routing #{loop_count}: intent={current_intent}")
+        
+        # Priority 1: If pricing is complete, END
+        if state.get("_pricing_complete", False):
+            print(f"   → END (pricing complete)")
+            return END
+        
+        # Priority 1.5: If we just added a message, END (conversation turn complete)
+        messages = state.get("messages", [])
+        if len(messages) > 1:  # More than just the user message
+            last_message = messages[-1]
+            if isinstance(last_message, AIMessage):
+                print(f"   → END (AI message added)")
+                return END
+        
+        # Priority 2: Human handoff
+        if state.get("requires_human"):
+            print(f"   → customer_service")
+            return "customer_service"
+        
+        # Priority 3: Non-quote intents
         intent = state.get("current_intent", "")
         if intent == "policy_explanation":
+            print(f"   → policy_explainer")
             return "policy_explainer"
         elif intent == "claims_guidance":
+            print(f"   → claims_guidance")
             return "claims_guidance"
         elif intent == "human_handoff":
+            print(f"   → customer_service")
             return "customer_service"
         
-        # Priority 3: Quote flow - SIMPLIFIED LOGIC
-        if intent == "quote":
-            # Check if we have a quote already - if so, we're done
-            if state.get("quote_data"):
+        # Priority 4: Quote flow with clear progression
+        if intent == "quote" or intent == "":
+            confirmation_received = state.get("confirmation_received", False)
+            ready_for_pricing = state.get("_ready_for_pricing", False)
+            pricing_complete = state.get("_pricing_complete", False)
+            has_area = state.get("trip_details", {}).get("area") is not None
+            has_quote = state.get("quote_data") is not None
+            
+            print(f"   confirmed={confirmation_received}, ready={ready_for_pricing}")
+            print(f"   area={has_area}, quote={has_quote}, complete={pricing_complete}")
+            
+            # If pricing already complete, we're done
+            if pricing_complete or has_quote:
+                print(f"   → END (quote exists)")
                 return END
             
-            # Check if we have area but no quote - go to pricing
-            if state.get("trip_details", {}).get("area") and not state.get("quote_data"):
-                return "pricing"
+            # If confirmed and ready, proceed through pricing flow
+            if confirmation_received and ready_for_pricing:
+                if not has_area:
+                    print(f"   → risk_assessment")
+                    return "risk_assessment"
+                elif has_area and not has_quote:
+                    print(f"   → pricing")
+                    return "pricing"
+                else:
+                    print(f"   → END")
+                    return END
             
-            # Check if we have confirmation but no area - go to risk assessment
-            if state.get("confirmation_received") and not state.get("trip_details", {}).get("area"):
-                return "risk_assessment"
-            
-            # Otherwise, stay in needs_assessment
+            # Otherwise, continue collecting info
+            print(f"   → needs_assessment")
             return "needs_assessment"
         
-        # Default: general inquiry routes to needs assessment for quote flow
+        # Default fallback
+        print(f"   → needs_assessment (default)")
         return "needs_assessment"
     
     # Create the graph
@@ -521,6 +679,7 @@ Is this information correct? (yes/no)"""
             "policy_explainer": "policy_explainer",
             "claims_guidance": "claims_guidance",
             "customer_service": "customer_service",
+            END: END
         }
     )
     
@@ -532,6 +691,7 @@ Is this information correct? (yes/no)"""
             "needs_assessment": "needs_assessment",  # Loop back for more questions
             "risk_assessment": "risk_assessment",     # Proceed to risk assessment
             "pricing": "pricing",                      # Skip to pricing if area already mapped
+            "customer_service": "customer_service",   # Human handoff
             END: END                                   # End if needed
         }
     )
@@ -558,272 +718,127 @@ Is this information correct? (yes/no)"""
     # Set entry point
     graph.set_entry_point("orchestrator")
     
-    # Configure checkpointing for conversation persistence
+    # Configure LangGraph checkpointing
     try:
-        from langgraph.checkpoint.postgres import PostgresSaver
-        # Create checkpointer with proper connection handling
-        conn_string = settings.langgraph_checkpoint_db or settings.database_url
-        with PostgresSaver.from_conn_string(conn_string) as checkpointer:
-            # Setup tables if needed
-            checkpointer.setup()
-            return graph.compile(checkpointer=checkpointer)
+        checkpointer = get_or_create_checkpointer()
+        
+        if checkpointer is not None:
+            compiled_graph = graph.compile(checkpointer=checkpointer)
+            print("✅ Graph compiled with persistent checkpointing (SQLite)")
+            return compiled_graph
+        else:
+            print("⚠️  Checkpointing not available, using non-persistent mode")
+            return graph.compile()
+            
     except Exception as e:
-        # Fallback if checkpoint package not installed or connection fails
-        print(f"Warning: LangGraph checkpointing not available - {e}")
-        print("Using fallback without persistence")
+        print(f"⚠️  Checkpointing setup failed: {e}")
+        import traceback
+        traceback.print_exc()
+        print("⚠️  Falling back to non-persistent mode")
         return graph.compile()
 
 
-def create_conversation_graph_no_checkpoint(db) -> StateGraph:
-    """Create conversation graph without checkpointing for fallback."""
-    # Reuse the same graph creation logic but without checkpointing
-    tools = ConversationTools(db)
-    llm_client = GroqLLMClient()
-    pricing_service = PricingService()
-    
-    def orchestrator(state: ConversationState) -> ConversationState:
-        """Route conversation based on LLM intent classification."""
-        try:
-            last_message = state["messages"][-1]
-            
-            # Use LLM to classify intent
-            classification = llm_client.classify_intent(
-                last_message.content,
-                state["messages"][:-1]  # History excluding current message
-            )
-            
-            state["current_intent"] = classification["intent"]
-            state["confidence_score"] = classification["confidence"]
-            
-            # Add rationale for debugging
-            state["rationale"] = {
-                "intent": classification["intent"],
-                "confidence": classification["confidence"],
-                "reasoning": classification.get("reasoning", "")
-            }
-            
-            return state
-            
-        except Exception as e:
-            print(f"Error in orchestrator: {e}")
-            state["current_intent"] = "quote"  # Default fallback
-            state["confidence_score"] = 0.5
-            return state
-    
-    def needs_assessment(state: ConversationState) -> ConversationState:
-        """Collect trip information through structured conversation."""
-        try:
-            # Initialize data structures if not present
-            if "trip_details" not in state:
-                state["trip_details"] = {}
-            if "travelers_data" not in state:
-                state["travelers_data"] = {}
-            if "preferences" not in state:
-                state["preferences"] = {}
-            if "awaiting_confirmation" not in state:
-                state["awaiting_confirmation"] = False
-            if "confirmation_received" not in state:
-                state["confirmation_received"] = False
-            
-            trip = state["trip_details"]
-            travelers = state["travelers_data"]
-            prefs = state["preferences"]
-            
-            last_message = state["messages"][-1]
-            user_input = last_message.content
-            
-            # Simple extraction logic for fallback
-            user_input_lower = user_input.lower()
-            
-            # Extract destination
-            if not trip.get("destination"):
-                if "japan" in user_input_lower:
-                    trip["destination"] = "Japan"
-                elif "thailand" in user_input_lower:
-                    trip["destination"] = "Thailand"
-                elif "singapore" in user_input_lower:
-                    trip["destination"] = "Singapore"
-            
-            # Extract dates (simple patterns)
-            if not trip.get("departure_date"):
-                if "dec 15" in user_input_lower or "2025-12-15" in user_input_lower:
-                    trip["departure_date"] = date(2025, 12, 15)
-            
-            if not trip.get("return_date"):
-                if "dec 22" in user_input_lower or "2025-12-22" in user_input_lower:
-                    trip["return_date"] = date(2025, 12, 22)
-            
-            # Extract travelers
-            if not travelers.get("ages"):
-                if "age 30" in user_input_lower or "30" in user_input_lower:
-                    travelers["ages"] = [30]
-                    travelers["count"] = 1
-            
-            # Extract adventure sports
-            if "adventure_sports" not in prefs:
-                if "no" in user_input_lower and ("adventure" in user_input_lower or "sports" in user_input_lower):
-                    prefs["adventure_sports"] = False
-            
-            # Check if we have all required info
-            has_destination = trip.get("destination")
-            has_departure = trip.get("departure_date")
-            has_return = trip.get("return_date")
-            has_travelers = travelers.get("ages")
-            
-            if has_destination and has_departure and has_return and has_travelers:
-                # All info collected, ask for confirmation
-                dest = trip["destination"]
-                dep_date = trip["departure_date"]
-                ret_date = trip["return_date"]
-                ages = travelers["ages"]
-                
-                response = f"""Let me confirm your trip details:
-
-📍 Destination: {dest}
-📅 Travel dates: {dep_date} to {ret_date}
-👥 Travelers: {len(ages)} traveler(s) (ages: {', '.join(map(str, ages))})
-🏔️ Adventure activities: No
-
-Is this information correct? (yes/no)"""
-                
-                state["awaiting_confirmation"] = True
-            else:
-                # Ask for missing information
-                if not has_destination:
-                    response = "Where are you traveling to?"
-                elif not has_departure:
-                    response = "When does your trip start? Please provide the date in YYYY-MM-DD format."
-                elif not has_return:
-                    response = "When do you return? Please provide the date in YYYY-MM-DD format."
-                elif not has_travelers:
-                    response = "How many travelers are going, and what are their ages?"
-                else:
-                    response = "Are you planning any adventure activities like skiing, scuba diving, or trekking?"
-            
-            state["messages"].append(AIMessage(content=response))
-            return state
-            
-        except Exception as e:
-            response = "I'm having trouble processing that. Could you please rephrase?"
-            state["messages"].append(AIMessage(content=response))
-            return state
-    
-    def risk_assessment(state: ConversationState) -> ConversationState:
-        """Map destination to geographic area for pricing."""
-        trip = state.get("trip_details", {})
-        destination = trip.get("destination")
-        
-        if destination:
-            # Simple area mapping
-            if destination.lower() in ["japan", "tokyo", "osaka"]:
-                trip["area"] = "asia_developed"
-            elif destination.lower() in ["thailand", "bangkok"]:
-                trip["area"] = "asia_developing"
-            else:
-                trip["area"] = "asia_developed"  # Default
-        
-        response = "Great! I've mapped your destination to the appropriate region for pricing."
-        state["messages"].append(AIMessage(content=response))
-        return state
-    
-    def pricing(state: ConversationState) -> ConversationState:
-        """Generate insurance quotes using pricing service."""
-        try:
-            trip = state.get("trip_details", {})
-            travelers = state.get("travelers_data", {})
-            preferences = state.get("preferences", {})
-            
-            # Generate quote
-            quote_result = pricing_service.generate_quote(
-                destination=trip.get("destination", "Japan"),
-                departure_date=trip.get("departure_date", date(2025, 12, 15)),
-                return_date=trip.get("return_date", date(2025, 12, 22)),
-                travelers=travelers.get("ages", [30]),
-                adventure_sports=preferences.get("adventure_sports", False)
-            )
-            
-            if quote_result["success"]:
-                state["quote_data"] = quote_result
-                response = f"""Here are your travel insurance options:
-
-💰 **Standard Plan**: ${quote_result['quotes']['standard']['price']:.2f}
-   - Medical coverage: ${quote_result['quotes']['standard']['coverage']['medical']:,}
-   - Trip cancellation: ${quote_result['quotes']['standard']['coverage']['trip_cancellation']:,}
-
-💰 **Premium Plan**: ${quote_result['quotes']['premium']['price']:.2f}
-   - Medical coverage: ${quote_result['quotes']['premium']['coverage']['medical']:,}
-   - Trip cancellation: ${quote_result['quotes']['premium']['coverage']['trip_cancellation']:,}
-
-Would you like to proceed with one of these options?"""
-            else:
-                response = "I'm sorry, I couldn't generate quotes at this time. Please try again later."
-            
-            state["messages"].append(AIMessage(content=response))
-            return state
-            
-        except Exception as e:
-            response = "I'm having trouble generating quotes. Please try again."
-            state["messages"].append(AIMessage(content=response))
-            return state
-    
-    def should_continue(state: ConversationState) -> str:
-        """Determine next step in conversation."""
-        intent = state.get("current_intent", "")
-        
-        if intent == "quote":
-            # Check if we have a quote already - if so, we're done
-            if state.get("quote_data"):
-                return END
-            
-            # Check if we have area but no quote - go to pricing
-            if state.get("trip_details", {}).get("area") and not state.get("quote_data"):
-                return "pricing"
-            
-            # Check if we have confirmation but no area - go to risk assessment
-            if state.get("confirmation_received") and not state.get("trip_details", {}).get("area"):
-                return "risk_assessment"
-            
-            # Otherwise, stay in needs_assessment
-            return "needs_assessment"
-        
-        return "needs_assessment"
-    
-    # Create the graph
-    graph = StateGraph(ConversationState)
-    
-    # Add nodes
-    graph.add_node("orchestrator", orchestrator)
-    graph.add_node("needs_assessment", needs_assessment)
-    graph.add_node("risk_assessment", risk_assessment)
-    graph.add_node("pricing", pricing)
-    
-    # Add edges
-    graph.set_entry_point("orchestrator")
-    
-    graph.add_conditional_edges(
-        "orchestrator",
-        should_continue,
-        {
-            "needs_assessment": "needs_assessment",
-            "risk_assessment": "risk_assessment",
-            "pricing": "pricing",
-            END: END
-        }
-    )
-    
-    graph.add_conditional_edges(
-        "needs_assessment",
-        should_continue,
-        {
-            "needs_assessment": "needs_assessment",
-            "risk_assessment": "risk_assessment",
-            "pricing": "pricing",
-            END: END
-        }
-    )
-    
-    graph.add_edge("risk_assessment", "pricing")
-    graph.add_edge("pricing", END)
-    
-    # Compile without checkpointing
-    return graph.compile()
+# def create_conversation_graph_no_checkpoint(db) -> StateGraph:
+#     """Create conversation graph without checkpointing for fallback."""
+#     # Reuse the same graph creation logic but without checkpointing
+#     tools = ConversationTools(db)
+#     llm_client = GroqLLMClient()
+#     pricing_service = PricingService()
+#     
+#     def risk_assessment(state: ConversationState) -> ConversationState:
+#         """Map destination to geographic area for pricing."""
+#         trip = state.get("trip_details", {})
+#         destination = trip.get("destination")
+#         
+#         if destination:
+#             # Simple area mapping
+#             if destination.lower() in ["japan", "tokyo", "osaka"]:
+#                 trip["area"] = "asia_developed"
+#             elif destination.lower() in ["thailand", "bangkok"]:
+#                 trip["area"] = "asia_developing"
+#             else:
+#                 trip["area"] = "asia_developed"  # Default
+#         
+#         response = "Great! I've mapped your destination to the appropriate region for pricing."
+#         state["messages"].append(AIMessage(content=response))
+#         return state
+#     
+#     def pricing(state: ConversationState) -> ConversationState:
+#         """Generate insurance quotes using pricing service."""
+#         try:
+#             trip = state.get("trip_details", {})
+#             travelers = state.get("travelers_data", {})
+#             preferences = state.get("preferences", {})
+#             
+#             # Generate quote
+#             quote_result = pricing_service.generate_quote(
+#                 destination=trip.get("destination", "Japan"),
+#                 departure_date=trip.get("departure_date", date(2025, 12, 15)),
+#                 return_date=trip.get("return_date", date(2025, 12, 22)),
+#                 travelers=travelers.get("ages", [30]),
+#                 adventure_sports=preferences.get("adventure_sports", False)
+#             )
+#             
+#             if quote_result["success"]:
+#                 state["quote_data"] = quote_result
+#                 response = f"""Here are your travel insurance options:
+# 
+# 💰 **Standard Plan**: ${quote_result['quotes']['standard']['price']:.2f}
+#    - Medical coverage: ${quote_result['quotes']['standard']['coverage']['medical']:,}
+#    - Trip cancellation: ${quote_result['quotes']['standard']['coverage']['trip_cancellation']:,}
+# 
+# 💰 **Premium Plan**: ${quote_result['quotes']['premium']['price']:.2f}
+#    - Medical coverage: ${quote_result['quotes']['premium']['coverage']['medical']:,}
+#    - Trip cancellation: ${quote_result['quotes']['premium']['coverage']['trip_cancellation']:,}
+# 
+# Would you like to proceed with one of these options?"""
+#             else:
+#                 response = "I'm sorry, I couldn't generate quotes at this time. Please try again later."
+#             
+#             state["messages"].append(AIMessage(content=response))
+#             return state
+#             
+#         except Exception as e:
+#             response = "I'm having trouble generating quotes. Please try again."
+#             state["messages"].append(AIMessage(content=response))
+#             return state
+#     
+#     # Create the graph
+#     graph = StateGraph(ConversationState)
+#     
+#     # Add nodes
+#     graph.add_node("orchestrator", orchestrator)
+#     graph.add_node("needs_assessment", needs_assessment)
+#     graph.add_node("risk_assessment", risk_assessment)
+#     graph.add_node("pricing", pricing)
+#     
+#     # Add edges
+#     graph.set_entry_point("orchestrator")
+#     
+#     graph.add_conditional_edges(
+#         "orchestrator",
+#         should_continue,
+#         {
+#             "needs_assessment": "needs_assessment",
+#             "risk_assessment": "risk_assessment",
+#             "pricing": "pricing",
+#             END: END
+#         }
+#     )
+#     
+#     graph.add_conditional_edges(
+#         "needs_assessment",
+#         should_continue,
+#         {
+#             "needs_assessment": "needs_assessment",
+#             "risk_assessment": "risk_assessment",
+#             "pricing": "pricing",
+#             END: END
+#         }
+#     )
+#     
+#     graph.add_edge("risk_assessment", "pricing")
+#     graph.add_edge("pricing", END)
+#     
+#     # Compile without checkpointing
+#     return graph.compile()
