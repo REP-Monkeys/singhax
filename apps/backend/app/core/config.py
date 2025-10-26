@@ -37,11 +37,22 @@ class Settings(BaseSettings):
     stripe_publishable_key: Optional[str] = None
     
     # LLM Configuration
-    model_name: str = "llama3-8b-8192"  # Default Groq model
+    model_name: str = "llama-3.1-70b-versatile"  # Default Groq model
     embedding_model: str = "text-embedding-3-small"
+    
+    # Groq Configuration
+    # Groq-specific model configuration (overrides model_name for Groq calls)
+    groq_model: str = "llama-3.1-70b-versatile"
+    groq_temperature: float = 0.1
+    groq_max_tokens: int = 2000
+    groq_timeout: int = 30
     
     # Vector Store
     vector_dimension: int = 1536  # OpenAI embedding dimension
+    
+    # LangGraph Configuration
+    # LangGraph checkpoint DB - falls back to database_url if not set
+    langgraph_checkpoint_db: Optional[str] = None
     
     # Application Settings
     debug: bool = False
