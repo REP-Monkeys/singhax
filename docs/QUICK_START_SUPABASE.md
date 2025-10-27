@@ -81,3 +81,5 @@ Your application is now connected to Supabase. View your tables in the Supabase 
 ### SSL Error
 - Ensure connection string includes `?sslmode=require`
 - For connection pooling, use port `6543` instead of `5432`
+
+

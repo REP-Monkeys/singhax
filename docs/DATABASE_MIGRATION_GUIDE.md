@@ -53,3 +53,5 @@ alembic downgrade <revision>
 - `alembic current` - Show current version
 - `alembic history` - Show all migrations
 - `alembic revision --autogenerate -m "msg"` - Create new migration
+
+

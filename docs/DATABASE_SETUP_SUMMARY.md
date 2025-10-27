@@ -148,3 +148,5 @@ Check Supabase dashboard → Table Editor
 5. Run migrations
 6. Test connection
 7. Start developing!
+
+
