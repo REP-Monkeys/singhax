@@ -144,3 +144,5 @@ DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@[PROJECT-REF].supabase.co:543
 - [Supabase Database Documentation](https://supabase.com/docs/guides/database)
 - [Supabase Connection Pooling](https://supabase.com/docs/guides/database/connecting-to-postgres#connection-pooler)
 - [Alembic Documentation](https://alembic.sqlalchemy.org/)
+
+

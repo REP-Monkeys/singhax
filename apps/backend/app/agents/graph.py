@@ -44,41 +44,12 @@ class PersistentCheckpointer:
 
 def get_or_create_checkpointer():
     """
-    Get or create SQLite checkpointer for session persistence.
-    Uses SQLite to avoid PostgreSQL prepared statement conflicts.
+    Checkpointing disabled for Phase 1 - version incompatibility with SQLite checkpointer.
+    Phase 1 goal: Test database migrations and basic functionality.
+    Will re-enable with PostgreSQL checkpointing in Phase 2 (Supabase).
     """
-    global _checkpointer_singleton, _checkpointer_lock
-    
-    if _checkpointer_singleton is not None:
-        return _checkpointer_singleton
-    
-    if _checkpointer_lock:
-        import time
-        for _ in range(10):
-            time.sleep(0.1)
-            if _checkpointer_singleton is not None:
-                return _checkpointer_singleton
-        return None
-    
-    _checkpointer_lock = True
-    
-    try:
-        # Use SQLite for checkpointing (avoids PostgreSQL conflicts)
-        checkpoint_dir = os.getenv("CHECKPOINT_DIR", os.path.join(os.getcwd(), "checkpoints"))
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        checkpoint_path = os.path.join(checkpoint_dir, "langgraph_checkpoints.db")
-        
-        # Temporarily disable checkpointing to get server running
-        print("⚠️  Checkpointing disabled for demo - using non-persistent mode")
-        return None
-        
-    except Exception as e:
-        print(f"❌ Checkpointing failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-    finally:
-        _checkpointer_lock = False
+    print("⚠️  Checkpointing disabled for Phase 1 (will enable in Phase 2)")
+    return None
 
 
 def parse_date_safe(date_string: str) -> Optional[date]:
@@ -723,6 +694,7 @@ Is this information correct? (yes/no)"""
         checkpointer = get_or_create_checkpointer()
         
         if checkpointer is not None:
+            # Use context manager properly with the graph
             compiled_graph = graph.compile(checkpointer=checkpointer)
             print("✅ Graph compiled with persistent checkpointing (SQLite)")
             return compiled_graph
