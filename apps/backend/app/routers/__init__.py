@@ -8,6 +8,7 @@ from .trips import router as trips_router
 from .rag import router as rag_router
 from .handoff import router as handoff_router
 from .voice import router as voice_router
+from .chat import router as chat_router
 
 __all__ = [
     "auth_router",
@@ -18,4 +19,5 @@ __all__ = [
     "rag_router",
     "handoff_router",
     "voice_router",
+    "chat_router",
 ]
