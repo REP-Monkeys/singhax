@@ -9,6 +9,7 @@ A conversational travel insurance platform that provides AI-powered quoting, pol
 - Docker and Docker Compose
 - Node.js 18+ (for local development)
 - Python 3.11+ (for local development)
+- Supabase account (optional, for cloud database)
 
 ### Running with Docker (Recommended)
 
@@ -20,7 +21,10 @@ A conversational travel insurance platform that provides AI-powered quoting, pol
    # Edit .env with your API keys
    ```
 
-2. **Start all services:**
+2. **Connect to Supabase (Optional):**
+   See [docs/QUICK_START_SUPABASE.md](docs/QUICK_START_SUPABASE.md) for quick setup.
+
+3. **Start all services:**
    ```bash
    make up
    ```
@@ -98,8 +102,10 @@ A conversational travel insurance platform that provides AI-powered quoting, pol
 Copy `infra/env.example` to `.env` and configure:
 
 ```bash
-# Database
+# Database (Supabase or Local)
 DATABASE_URL=postgresql://postgres:password@localhost:5432/convo_travel_insure
+# Or for Supabase:
+# DATABASE_URL=postgresql://postgres:[PASSWORD]@[PROJECT-REF].supabase.co:5432/postgres?sslmode=require
 
 # External APIs
 GROQ_API_KEY=your-groq-api-key
@@ -108,6 +114,10 @@ STRIPE_SECRET_KEY=your-stripe-secret-key
 # Security
 SECRET_KEY=your-secret-key-change-in-production
 ```
+
+### Connecting to Supabase
+
+For cloud database hosting, see our [Supabase Setup Guide](docs/QUICK_START_SUPABASE.md).
 
 ### API Keys
 
@@ -212,12 +222,17 @@ make clean
 
 ### Database Migrations
 
+See [docs/DATABASE_MIGRATION_GUIDE.md](docs/DATABASE_MIGRATION_GUIDE.md) for detailed instructions.
+
 ```bash
 # Create migration
-docker-compose exec backend alembic revision --autogenerate -m "description"
+alembic revision --autogenerate -m "description"
 
 # Apply migrations
-make migrate
+alembic upgrade head
+
+# Rollback
+alembic downgrade -1
 ```
 
 ## 📖 Features

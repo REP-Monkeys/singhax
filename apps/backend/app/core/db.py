@@ -8,11 +8,15 @@ import uuid
 
 from app.core.config import settings
 
-# Create database engine
+# Create database engine with SSL support for Supabase
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,
-    echo=settings.debug
+    echo=settings.debug,
+    connect_args={
+        # Add SSL support for Supabase connections
+        "sslmode": "prefer" if "supabase.co" in settings.database_url else "disable"
+    }
 )
 
 # Create session factory
