@@ -5,10 +5,16 @@ from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.security import authenticate_user, create_access_token, get_current_user
-from app.schemas.user import UserCreate, UserLogin, UserResponse, Token
+from app.core.security import (
+    authenticate_user,
+    create_access_token,
+    get_current_user,
+    get_password_hash,
+    encrypt_sensitive_data,
+    decrypt_sensitive_data
+)
+from app.schemas.user import UserCreate, UserLogin, UserResponse, Token, OnboardingData, OnboardingStatusResponse
 from app.models.user import User
-from app.core.security import get_password_hash
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -69,3 +75,63 @@ async def get_current_user_info(
 ):
     """Get current user information."""
     return current_user
+
+
+@router.post("/onboarding", response_model=UserResponse)
+async def submit_onboarding(
+    onboarding_data: OnboardingData,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Submit user onboarding information."""
+
+    # Check if user is already onboarded
+    if current_user.is_onboarded:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User has already completed onboarding"
+        )
+
+    # Update user with onboarding data
+    current_user.date_of_birth = onboarding_data.date_of_birth
+    current_user.phone_number = onboarding_data.phone_number
+    current_user.nationality = onboarding_data.nationality
+    # Encrypt passport number for security
+    if onboarding_data.passport_number:
+        current_user.passport_number = encrypt_sensitive_data(onboarding_data.passport_number)
+    else:
+        current_user.passport_number = None
+
+    current_user.country_of_residence = onboarding_data.country_of_residence
+    current_user.state_province = onboarding_data.state_province
+    current_user.city = onboarding_data.city
+    current_user.postal_code = onboarding_data.postal_code
+
+    current_user.emergency_contact_name = onboarding_data.emergency_contact_name
+    current_user.emergency_contact_phone = onboarding_data.emergency_contact_phone
+    current_user.emergency_contact_relationship = onboarding_data.emergency_contact_relationship
+
+    current_user.has_pre_existing_conditions = onboarding_data.has_pre_existing_conditions
+    current_user.is_frequent_traveler = onboarding_data.is_frequent_traveler
+    current_user.preferred_coverage_type = onboarding_data.preferred_coverage_type
+
+    # Mark user as onboarded
+    current_user.is_onboarded = True
+    from datetime import datetime as dt
+    current_user.onboarded_at = dt.now()
+
+    db.commit()
+    db.refresh(current_user)
+
+    return current_user
+
+
+@router.get("/onboarding-status", response_model=OnboardingStatusResponse)
+async def get_onboarding_status(
+    current_user: User = Depends(get_current_user)
+):
+    """Check if current user has completed onboarding."""
+    return {
+        "is_onboarded": current_user.is_onboarded,
+        "onboarded_at": current_user.onboarded_at
+    }
