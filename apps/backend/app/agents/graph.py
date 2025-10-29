@@ -210,16 +210,44 @@ def create_conversation_graph(db) -> StateGraph:
             
             # Extract information from user message using LLM
             extracted = llm_client.extract_trip_info(user_input, current_slots)
-            
+
+            # Fallback: Direct date pattern matching if LLM didn't extract dates
+            # TEMPORARILY COMMENTED OUT FOR TESTING
+            # import re
+            # if not extracted.get("departure_date") and state.get("current_question") == "departure_date":
+            #     date_pattern = r'\b(\d{4})-(\d{2})-(\d{2})\b'
+            #     match = re.search(date_pattern, user_input)
+            #     if match:
+            #         extracted["departure_date"] = match.group(0)
+            #         print(f"   📅 Fallback: Extracted departure date from pattern: {extracted['departure_date']}")
+
+            # if not extracted.get("return_date") and state.get("current_question") == "return_date":
+            #     date_pattern = r'\b(\d{4})-(\d{2})-(\d{2})\b'
+            #     match = re.search(date_pattern, user_input)
+            #     if match:
+            #         extracted["return_date"] = match.group(0)
+            #         print(f"   📅 Fallback: Extracted return date from pattern: {extracted['return_date']}")
+
             # Update state with extracted information
+            current_q = state.get("current_question", "")
+            extracted_info = False
+            
+            print(f"   🔍 Extracted data from LLM: {extracted}")
+            print(f"   📝 Current question: {current_q}")
+            
             if "destination" in extracted:
                 trip["destination"] = extracted["destination"]
-            
+                print(f"   ✅ Extracted destination: {extracted['destination']}")
+                if current_q == "destination":
+                    extracted_info = True
+
             if "departure_date" in extracted:
                 # Parse to date object with error handling
                 parsed_date = parse_date_safe(extracted["departure_date"])
                 if parsed_date:
                     trip["departure_date"] = parsed_date
+                    if current_q == "departure_date":
+                        extracted_info = True
                 else:
                     # Date parsing failed - will ask for clarification below
                     pass
@@ -229,6 +257,8 @@ def create_conversation_graph(db) -> StateGraph:
                 parsed_date = parse_date_safe(extracted["return_date"])
                 if parsed_date:
                     trip["return_date"] = parsed_date
+                    if current_q == "return_date":
+                        extracted_info = True
                 else:
                     # Date parsing failed - will ask for clarification below
                     pass
@@ -239,28 +269,66 @@ def create_conversation_graph(db) -> StateGraph:
                 if valid_ages:
                     travelers["ages"] = valid_ages
                     travelers["count"] = len(valid_ages)
+                    if current_q == "travelers":
+                        extracted_info = True
             
             if "adventure_sports" in extracted:
                 prefs["adventure_sports"] = extracted["adventure_sports"]
+                if current_q == "adventure_sports":
+                    extracted_info = True
+            
+            # Clear current_question if we got the answer
+            if extracted_info and current_q:
+                print(f"   ✅ Received answer for: {current_q}")
+                state["current_question"] = ""
+            
+            # Special handling for adventure_sports when user says "no" but LLM doesn't extract it
+            if current_q == "adventure_sports" and not extracted_info and extracted == {}:
+                user_input_lower = user_input.lower().strip()
+                # Check if user explicitly said no
+                if any(neg_word in user_input_lower for neg_word in ["no", "nope", "not", "none", "nah"]):
+                    prefs["adventure_sports"] = False
+                    extracted_info = True
+                    state["current_question"] = ""
+                    print(f"   ✅ Parsed 'no' for adventure_sports")
+                elif any(pos_word in user_input_lower for pos_word in ["yes", "yeah", "yep", "sure", "probably"]):
+                    prefs["adventure_sports"] = True
+                    extracted_info = True
+                    state["current_question"] = ""
+                    print(f"   ✅ Parsed 'yes' for adventure_sports")
             
             # Fallback: Simple keyword extraction if LLM didn't extract anything
+            # TEMPORARILY COMMENTED OUT FOR TESTING
+            # if not any([trip.get("destination"), trip.get("departure_date"), trip.get("return_date"), travelers.get("ages")]):
+            #     user_input_lower = user_input.lower()
+            #     
+            #     # Simple keyword extraction
+            #     if "japan" in user_input_lower:
+            #         trip["destination"] = "Japan"
+            #     elif "thailand" in user_input_lower:
+            #         trip["destination"] = "Thailand"
+            #     elif "singapore" in user_input_lower:
+            #         trip["destination"] = "Singapore"
+            #     
+            #     # If still no information extracted, this is likely an initial greeting
+            #     if not any([trip.get("destination"), trip.get("departure_date"), trip.get("return_date"), travelers.get("ages")]):
+            #         # This is an initial greeting - ask for destination first
+            #         response = "I'd be happy to help you with travel insurance! Where are you planning to travel?"
+            #         state["current_question"] = "destination"  # CRITICAL: Set question to prevent loop
+            #         print(f"   💬 Asking: {response}")
+            #         state["messages"].append(AIMessage(content=response))
+            #         return state
+            
+            # If still no information extracted, this is likely an initial greeting
+            print(f"   🔍 Check: trip.get('destination') = {trip.get('destination')}")
+            print(f"   🔍 Missing info check: {not any([trip.get('destination'), trip.get('departure_date'), trip.get('return_date'), travelers.get('ages')])}")
             if not any([trip.get("destination"), trip.get("departure_date"), trip.get("return_date"), travelers.get("ages")]):
-                user_input_lower = user_input.lower()
-                
-                # Simple keyword extraction
-                if "japan" in user_input_lower:
-                    trip["destination"] = "Japan"
-                elif "thailand" in user_input_lower:
-                    trip["destination"] = "Thailand"
-                elif "singapore" in user_input_lower:
-                    trip["destination"] = "Singapore"
-                
-                # If still no information extracted, this is likely an initial greeting
-                if not any([trip.get("destination"), trip.get("departure_date"), trip.get("return_date"), travelers.get("ages")]):
-                    # This is an initial greeting - ask for destination first
-                    response = "I'd be happy to help you with travel insurance! Where are you planning to travel?"
-                    state["messages"].append(AIMessage(content=response))
-                    return state
+                # This is an initial greeting - ask for destination first
+                response = "I'd be happy to help you with travel insurance! Where are you planning to travel?"
+                state["current_question"] = "destination"  # CRITICAL: Set question to prevent loop
+                print(f"   💬 Asking: {response}")
+                state["messages"].append(AIMessage(content=response))
+                return state
             
             # Handle confirmation flow
             if state.get("awaiting_confirmation"):
@@ -273,11 +341,14 @@ def create_conversation_graph(db) -> StateGraph:
                     state["confirmation_received"] = True
                     state["_ready_for_pricing"] = True  # ADD THIS LINE
                     state["awaiting_confirmation"] = False
+                    state["current_question"] = ""  # Clear the question
+                    print(f"   ✅ User confirmed - ready for pricing")
                     response = "Great! Let me calculate your insurance options..."
                     state["messages"].append(AIMessage(content=response))
                     return state
                 elif said_no:
                     state["awaiting_confirmation"] = False
+                    state["current_question"] = ""  # Clear to ask for corrections
                     response = "No problem! What would you like to correct?"
                     state["messages"].append(AIMessage(content=response))
                     return state
@@ -316,19 +387,24 @@ def create_conversation_graph(db) -> StateGraph:
                 if "destination" in missing:
                     response = "Where are you traveling to?"
                     state["current_question"] = "destination"
+                    print(f"   💬 Asking: {response}")
                 elif "departure_date" in missing:
                     response = "When does your trip start? Please provide the date in YYYY-MM-DD format. For example: 2025-12-15"
                     state["current_question"] = "departure_date"
+                    print(f"   💬 Asking: {response}")
                 elif "return_date" in missing:
                     response = "When do you return to Singapore? Please provide the date in YYYY-MM-DD format. For example: 2025-12-22"
                     state["current_question"] = "return_date"
+                    print(f"   💬 Asking: {response}")
                 elif "travelers" in missing:
                     response = "How many travelers are going, and what are their ages? For example: '2 travelers, ages 30 and 8'"
                     state["current_question"] = "travelers"
+                    print(f"   💬 Asking: {response}")
             elif prefs.get("adventure_sports") is False and not state.get("awaiting_confirmation"):
                 # Ask about adventure sports if not explicitly answered
                 response = "Are you planning any adventure activities like skiing, scuba diving, trekking, or bungee jumping?"
                 state["current_question"] = "adventure_sports"
+                print(f"   💬 Asking: {response}")
             elif all_required_present and not state.get("awaiting_confirmation"):
                 # All info collected, show summary and ask for confirmation
                 dest = trip["destination"]
@@ -352,6 +428,7 @@ Is this information correct? (yes/no)"""
                 
                 state["awaiting_confirmation"] = True
                 state["current_question"] = "confirmation"
+                print(f"   💬 Asking for confirmation")
             else:
                 # Shouldn't reach here, but handle gracefully
                 response = "I have all the information I need. Let me calculate your quote..."
@@ -600,15 +677,7 @@ Is this information correct? (yes/no)"""
         if state.get("_pricing_complete", False):
             print(f"   → END (pricing complete)")
             return END
-        
-        # Priority 1.5: If we just added a message, END (conversation turn complete)
-        messages = state.get("messages", [])
-        if len(messages) > 1:  # More than just the user message
-            last_message = messages[-1]
-            if isinstance(last_message, AIMessage):
-                print(f"   → END (AI message added)")
-                return END
-        
+
         # Priority 2: Human handoff
         if state.get("requires_human"):
             print(f"   → customer_service")
@@ -631,16 +700,29 @@ Is this information correct? (yes/no)"""
             confirmation_received = state.get("confirmation_received", False)
             ready_for_pricing = state.get("_ready_for_pricing", False)
             pricing_complete = state.get("_pricing_complete", False)
+            current_question = state.get("current_question", "")
+            awaiting_confirmation = state.get("awaiting_confirmation", False)
             has_area = state.get("trip_details", {}).get("area") is not None
             has_quote = state.get("quote_data") is not None
             
             print(f"   confirmed={confirmation_received}, ready={ready_for_pricing}")
             print(f"   area={has_area}, quote={has_quote}, complete={pricing_complete}")
+            print(f"   current_question={current_question}, awaiting={awaiting_confirmation}")
             
             # If pricing already complete, we're done
             if pricing_complete or has_quote:
                 print(f"   → END (quote exists)")
                 return END
+            
+            # CRITICAL FIX: If we're waiting for user response, check if last message is from user
+            # If we asked a question AND the last message is from AI, END turn
+            # If we asked a question AND the last message is from user, process the answer
+            messages = state.get("messages", [])
+            if messages:
+                last_msg_is_ai = isinstance(messages[-1], AIMessage)
+                if (current_question or awaiting_confirmation) and last_msg_is_ai:
+                    print(f"   → END (waiting for user response)")
+                    return END
             
             # If confirmed and ready, proceed through pricing flow
             if confirmation_received and ready_for_pricing:

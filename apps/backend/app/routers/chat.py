@@ -99,16 +99,34 @@ async def send_message(
     # Invoke LangGraph with real conversation intelligence
     # The checkpointer automatically handles state persistence
     config = {"configurable": {"thread_id": request.session_id}}
-    
+
     try:
         print(f"\n💬 Processing message for session {request.session_id[:8]}...")
         print(f"   User message: '{request.message[:80]}...'")
-        
-        # Invoke graph - checkpointer handles state automatically
-        result = graph.invoke(
-            {"messages": [HumanMessage(content=request.message)]},
-            config
-        )
+
+        # Load existing state from checkpointer to preserve conversation context
+        try:
+            existing_state = graph.get_state(config)
+        except Exception as e:
+            print(f"   ⚠️  Could not load existing state: {e}")
+            existing_state = None
+
+        if existing_state and existing_state.values and existing_state.values.get("messages"):
+            # Continuing existing conversation - append new message to existing state
+            print(f"   📂 Loaded existing state with {len(existing_state.values.get('messages', []))} messages")
+            # Get the messages list and append new message
+            existing_messages = list(existing_state.values.get("messages", []))
+            existing_messages.append(HumanMessage(content=request.message))
+
+            # Create input with updated messages
+            current_state = {"messages": existing_messages}
+        else:
+            # New conversation - initialize state
+            print(f"   🆕 Starting new conversation")
+            current_state = {"messages": [HumanMessage(content=request.message)]}
+
+        # Invoke graph with messages - graph will handle merging with checkpoint state
+        result = graph.invoke(current_state, config)
         
         print(f"✅ LangGraph execution complete")
         print(f"   State keys: {list(result.keys())}")

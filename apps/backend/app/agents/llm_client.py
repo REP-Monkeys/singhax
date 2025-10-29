@@ -220,16 +220,26 @@ Extract information and call the function with the extracted data."""
             
             response = llm_with_tools.invoke(messages)
             
+            print(f"   🧠 LLM Response type: {type(response)}")
+            print(f"   🧠 Has tool_calls attr: {hasattr(response, 'tool_calls')}")
+            if hasattr(response, 'tool_calls'):
+                print(f"   🧠 Tool calls: {response.tool_calls}")
+            
             # Check for tool calls
             if hasattr(response, 'tool_calls') and response.tool_calls:
                 # Extract arguments from first tool call
                 extracted = response.tool_calls[0].get('args', {})
+                print(f"   ✅ Extracted from tool call: {extracted}")
                 return extracted
             
+            print(f"   ⚠️ No tool call returned, LLM said: {response.content if hasattr(response, 'content') else response}")
             return {}
             
         except Exception as e:
             # On error, return empty dict
+            print(f"   ❌ LLM extraction error: {e}")
+            import traceback
+            traceback.print_exc()
             return {}
     
     def generate_conversational_response(
