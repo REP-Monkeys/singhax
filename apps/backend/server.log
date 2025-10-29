@@ -552,3 +552,22 @@ WHERE users.id = %(id_1)s::UUID
 2025-10-28 22:01:48,929 INFO sqlalchemy.engine.Engine [generated in 0.00014s] {'id_1': '47ded42d-94fc-4e17-b37b-81fd74353997', 'param_1': 1}
 INFO:     127.0.0.1:53044 - "GET /api/v1/auth/me HTTP/1.1" 200 OK
 2025-10-28 22:01:48,995 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:52837 - "OPTIONS /api/v1/auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52837 - "GET /api/v1/auth/me HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:53858 - "OPTIONS /api/v1/auth/login HTTP/1.1" 200 OK
+2025-10-29 11:12:44,837 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2025-10-29 11:12:44,839 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.email AS users_email, users.name AS users_name, users.hashed_password AS users_hashed_password, users.is_active AS users_is_active, users.is_verified AS users_is_verified, users.created_at AS users_created_at, users.updated_at AS users_updated_at, users.date_of_birth AS users_date_of_birth, users.phone_number AS users_phone_number, users.nationality AS users_nationality, users.passport_number AS users_passport_number, users.country_of_residence AS users_country_of_residence, users.state_province AS users_state_province, users.city AS users_city, users.postal_code AS users_postal_code, users.emergency_contact_name AS users_emergency_contact_name, users.emergency_contact_phone AS users_emergency_contact_phone, users.emergency_contact_relationship AS users_emergency_contact_relationship, users.has_pre_existing_conditions AS users_has_pre_existing_conditions, users.is_frequent_traveler AS users_is_frequent_traveler, users.preferred_coverage_type AS users_preferred_coverage_type, users.is_onboarded AS users_is_onboarded, users.onboarded_at AS users_onboarded_at 
+FROM users 
+WHERE users.email = %(email_1)s 
+ LIMIT %(param_1)s
+2025-10-29 11:12:44,839 INFO sqlalchemy.engine.Engine [cached since 1.475e+04s ago] {'email_1': 'winstony29@gmail.com', 'param_1': 1}
+INFO:     127.0.0.1:53858 - "POST /api/v1/auth/login HTTP/1.1" 200 OK
+2025-10-29 11:12:45,089 INFO sqlalchemy.engine.Engine ROLLBACK
+2025-10-29 11:12:45,146 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2025-10-29 11:12:45,146 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.email AS users_email, users.name AS users_name, users.hashed_password AS users_hashed_password, users.is_active AS users_is_active, users.is_verified AS users_is_verified, users.created_at AS users_created_at, users.updated_at AS users_updated_at, users.date_of_birth AS users_date_of_birth, users.phone_number AS users_phone_number, users.nationality AS users_nationality, users.passport_number AS users_passport_number, users.country_of_residence AS users_country_of_residence, users.state_province AS users_state_province, users.city AS users_city, users.postal_code AS users_postal_code, users.emergency_contact_name AS users_emergency_contact_name, users.emergency_contact_phone AS users_emergency_contact_phone, users.emergency_contact_relationship AS users_emergency_contact_relationship, users.has_pre_existing_conditions AS users_has_pre_existing_conditions, users.is_frequent_traveler AS users_is_frequent_traveler, users.preferred_coverage_type AS users_preferred_coverage_type, users.is_onboarded AS users_is_onboarded, users.onboarded_at AS users_onboarded_at 
+FROM users 
+WHERE users.id = %(id_1)s::UUID 
+ LIMIT %(param_1)s
+2025-10-29 11:12:45,146 INFO sqlalchemy.engine.Engine [cached since 1.474e+04s ago] {'id_1': '47ded42d-94fc-4e17-b37b-81fd74353997', 'param_1': 1}
+INFO:     127.0.0.1:53858 - "GET /api/v1/auth/me HTTP/1.1" 200 OK
+2025-10-29 11:12:45,170 INFO sqlalchemy.engine.Engine ROLLBACK
