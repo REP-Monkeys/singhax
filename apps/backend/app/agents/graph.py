@@ -13,10 +13,10 @@ from app.services.pricing import PricingService
 from app.services.geo_mapping import GeoMapper
 from app.core.config import settings
 
-
 # Singleton checkpointer to avoid connection pool conflicts
 _checkpointer_singleton = None
 _checkpointer_lock = False
+
 
 class PersistentCheckpointer:
     """Wrapper around PostgresSaver to handle context manager properly."""
@@ -115,13 +115,14 @@ class ConversationState(TypedDict):
     policy_question: str
     claim_type: str
     handoff_reason: str
-    # New fields for Step 1 quote flow
+    # Fields for Step 1 quote flow
     trip_details: Dict[str, Any]  # destination, departure_date, return_date, duration_days, area, base_rate
     travelers_data: Dict[str, Any]  # ages list, count
     preferences: Dict[str, Any]  # adventure_sports
     current_question: str  # Which question we're asking
     awaiting_confirmation: bool  # Waiting for user confirmation
     confirmation_received: bool  # User confirmed details
+    awaiting_field: str  # Specific field being collected
     # Loop protection and flow control
     _loop_count: int  # Safety counter to prevent infinite loops
     _ready_for_pricing: bool  # Flag when ready to generate quote

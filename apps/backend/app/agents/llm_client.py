@@ -19,10 +19,10 @@ class GroqLLMClient:
         """Initialize Groq LLM client with configuration from settings."""
         self.llm = ChatGroq(
             api_key=settings.groq_api_key,
-            model=settings.groq_model,
-            temperature=settings.groq_temperature,
-            max_tokens=settings.groq_max_tokens,
-            timeout=settings.groq_timeout,
+            model=settings.groq_model or settings.model_name,
+            temperature=settings.groq_temperature or 0.7,
+            max_tokens=settings.groq_max_tokens or 500,
+            timeout=settings.groq_timeout or 30,
         )
     
     def classify_intent(
@@ -497,5 +497,3 @@ def is_llm_available() -> bool:
         True if LLM client is available, False otherwise
     """
     return settings.groq_api_key is not None or settings.openai_api_key is not None
-
-

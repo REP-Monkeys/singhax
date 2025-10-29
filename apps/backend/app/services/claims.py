@@ -138,7 +138,10 @@ class ClaimsService:
     
     def get_claim_requirements(self, claim_type: str) -> Dict[str, Any]:
         """Get requirements for a specific claim type."""
-        return self.claim_requirements.get(claim_type, {})
+        return self.claim_requirements.get(claim_type, {
+            "required_documents": ["Relevant documentation"],
+            "required_info": ["Details about the incident"]
+        })
     
     def upload_document(
         self,

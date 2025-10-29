@@ -25,6 +25,7 @@ def get_conversation_graph(db: Session):
     """Get or create cached conversation graph."""
     # Simple caching - creates graph once per app instance
     if "graph" not in _graph_cache:
+        print("INFO: Initializing conversation graph...")
         _graph_cache["graph"] = create_conversation_graph(db)
     return _graph_cache["graph"]
 
@@ -69,7 +70,7 @@ async def send_message(
     - Groq LLM for intent classification and extraction
     - 6-question structured flow
     - Real quote generation
-    - Session persistence via SQLite checkpointing
+    - Session persistence via PostgreSQL checkpointing
     """
     
     # Validate session_id format
@@ -172,6 +173,7 @@ async def send_message(
             "preferences": result.get("preferences", {}),
             "awaiting_confirmation": result.get("awaiting_confirmation", False),
             "confirmation_received": result.get("confirmation_received", False),
+            "awaiting_field": result.get("awaiting_field", "")
         },
         quote=quote_data,
         requires_human=result.get("requires_human", False),
@@ -259,4 +261,3 @@ async def chat_health():
         "service": "chat",
         "timestamp": datetime.utcnow().isoformat() + "Z"
     }
-

@@ -1,0 +1,14 @@
+[33mcommit eab15651dab900e0abaf9a8cee31d7a537de623f[m
+Author: nickolaschua <nickolaschua7@gmail.com>
+Date:   Wed Oct 29 18:39:03 2025 +0800
+
+    fixed state persistence
+
+apps/backend/FORCE_RESTART.bat
+apps/backend/ISSUE_RESOLVED.md
+apps/backend/app/agents/graph.py
+apps/backend/app/agents/llm_client.py
+apps/backend/app/routers/chat.py
+apps/backend/fetch_groq_models.py
+apps/backend/run_single_test.py
+apps/backend/test_state_persistence.py

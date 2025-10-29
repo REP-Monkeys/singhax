@@ -38,11 +38,10 @@ class Settings(BaseSettings):
     stripe_publishable_key: Optional[str] = None
     
     # LLM Configuration
-    model_name: str = "llama3-8b-8192"  # Default Groq model (from backend branch)
+    model_name: str = "llama3-8b-8192"  # Default Groq model
     embedding_model: str = "text-embedding-3-small"
     
     # Groq Configuration
-    # Groq-specific model configuration (flexible from backend branch)
     groq_model: Optional[str] = None  # Alternative Groq model specification
     groq_temperature: Optional[float] = None
     groq_max_tokens: Optional[int] = None
