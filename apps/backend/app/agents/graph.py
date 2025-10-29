@@ -732,7 +732,7 @@ Is this information correct? (yes/no)"""
         if checkpointer is not None:
             # Use context manager properly with the graph
             compiled_graph = graph.compile(checkpointer=checkpointer)
-            print("✅ Graph compiled with persistent checkpointing (SQLite)")
+            print("✅ Graph compiled with persistent checkpointing (PostgreSQL)")
             return compiled_graph
         else:
             print("⚠️  Checkpointing not available, using non-persistent mode")
@@ -744,6 +744,176 @@ Is this information correct? (yes/no)"""
         traceback.print_exc()
         print("⚠️  Falling back to non-persistent mode")
         return graph.compile()
+
+
+def create_simple_conversation_graph(db) -> StateGraph:
+    """Create a simplified conversation graph as fallback when sophisticated features fail."""
+    
+    tools = ConversationTools(db)
+    
+    def simple_orchestrator(state: ConversationState) -> ConversationState:
+        """Simple intent detection without LLM."""
+        
+        last_message = state["messages"][-1]
+        user_input = last_message.content.lower()
+        
+        # Simple keyword-based intent detection
+        if any(word in user_input for word in ["quote", "price", "cost", "insurance"]):
+            state["current_intent"] = "quote"
+            state["confidence_score"] = 0.8
+        elif any(word in user_input for word in ["policy", "coverage", "what does"]):
+            state["current_intent"] = "policy_explanation"
+            state["confidence_score"] = 0.7
+        elif any(word in user_input for word in ["claim", "file", "submit"]):
+            state["current_intent"] = "claims_guidance"
+            state["confidence_score"] = 0.8
+        elif any(word in user_input for word in ["human", "agent", "help", "support"]):
+            state["current_intent"] = "human_handoff"
+            state["confidence_score"] = 0.9
+        else:
+            state["current_intent"] = "general_inquiry"
+            state["confidence_score"] = 0.5
+        
+        # Check if human handoff is needed
+        if state["confidence_score"] < 0.6:
+            state["requires_human"] = True
+        
+        return state
+    
+    def simple_needs_assessment(state: ConversationState) -> ConversationState:
+        """Simple trip information collection."""
+        
+        collected = state.get("collected_slots", {})
+        last_message = state["messages"][-1]
+        user_input = last_message.content.lower()
+        
+        # Simple keyword extraction
+        if "trip" in user_input or "travel" in user_input:
+            if "start" in user_input or "begin" in user_input:
+                collected["trip_start"] = "extracted_date"
+            if "end" in user_input or "finish" in user_input:
+                collected["trip_end"] = "extracted_date"
+            if "destination" in user_input or "going to" in user_input:
+                collected["destinations"] = ["extracted_destination"]
+        
+        if "traveler" in user_input or "person" in user_input:
+            collected["travelers"] = [{"name": "extracted_name", "age": 30}]
+        
+        if "activity" in user_input or "doing" in user_input:
+            collected["activities"] = [{"type": "sightseeing"}]
+        
+        state["collected_slots"] = collected
+        
+        # Generate response based on missing information
+        missing_info = []
+        if not collected.get("trip_start"):
+            missing_info.append("trip start date")
+        if not collected.get("destinations"):
+            missing_info.append("destinations")
+        if not collected.get("travelers"):
+            missing_info.append("traveler information")
+        
+        if missing_info:
+            response = f"I need some more information to provide an accurate quote. Please provide: {', '.join(missing_info)}."
+        else:
+            response = "Great! I have enough information to provide a quote. Let me calculate that for you."
+        
+        state["messages"].append(AIMessage(content=response))
+        return state
+    
+    def simple_pricing(state: ConversationState) -> ConversationState:
+        """Simple pricing calculation."""
+        
+        quote_data = state.get("quote_data", {})
+        
+        if quote_data:
+            # Calculate quote range using tools
+            range_result = tools.get_quote_range(
+                "basic_travel",  # Default product type
+                quote_data.get("travelers", []),
+                quote_data.get("activities", []),
+                7,  # Default duration
+                quote_data.get("destinations", [])
+            )
+            
+            if range_result["success"]:
+                price_min = range_result["price_min"]
+                price_max = range_result["price_max"]
+                
+                response = f"Based on your trip details, I can provide a quote range of ${price_min:.2f} - ${price_max:.2f}. Would you like me to calculate a firm price?"
+                
+                state["quote_data"]["price_range"] = {
+                    "min": price_min,
+                    "max": price_max,
+                    "breakdown": range_result["breakdown"]
+                }
+            else:
+                response = "I'm having trouble calculating the quote. Let me connect you with a human agent."
+                state["requires_human"] = True
+        else:
+            response = "I need more information to calculate your quote. Please provide your trip details."
+        
+        state["messages"].append(AIMessage(content=response))
+        return state
+    
+    def simple_should_continue(state: ConversationState) -> str:
+        """Simple routing logic."""
+        
+        intent = state.get("current_intent")
+        
+        if state.get("requires_human"):
+            return "customer_service"
+        
+        if intent == "quote":
+            if not state.get("collected_slots"):
+                return "needs_assessment"
+            elif not state.get("quote_data"):
+                return "pricing"
+            else:
+                return END
+        elif intent == "policy_explanation":
+            return "policy_explainer"
+        elif intent == "claims_guidance":
+            return "claims_guidance"
+        elif intent == "human_handoff":
+            return "customer_service"
+        else:
+            return "customer_service"
+    
+    # Create the simple graph
+    simple_graph = StateGraph(ConversationState)
+    
+    # Add nodes
+    simple_graph.add_node("orchestrator", simple_orchestrator)
+    simple_graph.add_node("needs_assessment", simple_needs_assessment)
+    simple_graph.add_node("pricing", simple_pricing)
+    simple_graph.add_node("policy_explainer", policy_explainer)
+    simple_graph.add_node("claims_guidance", claims_guidance)
+    simple_graph.add_node("customer_service", customer_service)
+    
+    # Add edges
+    simple_graph.set_entry_point("orchestrator")
+    
+    simple_graph.add_conditional_edges(
+        "orchestrator",
+        simple_should_continue,
+        {
+            "needs_assessment": "needs_assessment",
+            "pricing": "pricing",
+            "policy_explainer": "policy_explainer",
+            "claims_guidance": "claims_guidance",
+            "customer_service": "customer_service",
+            END: END
+        }
+    )
+    
+    simple_graph.add_edge("needs_assessment", "pricing")
+    simple_graph.add_edge("pricing", END)
+    simple_graph.add_edge("policy_explainer", END)
+    simple_graph.add_edge("claims_guidance", END)
+    simple_graph.add_edge("customer_service", END)
+    
+    return simple_graph.compile()
 
 
 # def create_conversation_graph_no_checkpoint(db) -> StateGraph:

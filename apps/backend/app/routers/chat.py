@@ -232,3 +232,13 @@ async def get_session_state(
         messages=formatted_messages
     )
 
+
+@router.get("/health")
+async def chat_health():
+    """Chat service health check endpoint."""
+    return {
+        "status": "healthy", 
+        "service": "chat",
+        "timestamp": datetime.utcnow().isoformat() + "Z"
+    }
+
