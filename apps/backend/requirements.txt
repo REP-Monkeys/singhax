@@ -7,23 +7,26 @@ python-multipart>=0.0.6
 sqlalchemy==2.0.23
 alembic==1.12.1
 psycopg2-binary==2.9.11
+psycopg>=3.1.0
 pgvector==0.2.4
 
 # Authentication and security
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-python-multipart==0.0.6
 
 # Pydantic and validation
-pydantic==2.5.0
-pydantic-settings==2.1.0
+pydantic>=2.7.4
+pydantic-settings>=2.4.0
 email-validator==2.1.0
 
 # LangChain and LangGraph
-langchain>=0.0.350
-langgraph>=0.0.20
-langchain-core>=0.1.8
-langchain-community>=0.0.10
+langchain==0.3.27
+langgraph==0.2.65
+langchain-core==0.3.79
+langchain-community==0.3.27
+langgraph-checkpoint-postgres==2.0.25
+langgraph-checkpoint-sqlite==2.0.11
+langchain-groq>=0.1.0
 
 # LLM and embeddings
 groq>=0.4.1
@@ -50,10 +53,7 @@ python-dotenv==1.0.0
 python-dateutil==2.8.2
 
 # JSON handling
-orjson==3.9.10
-
-# HTTP client
-httpx==0.25.2
+orjson>=3.10.1
 
 # File handling
 aiofiles==23.2.1

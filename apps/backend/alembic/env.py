@@ -6,6 +6,10 @@ from sqlalchemy import pool
 
 from alembic import context
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
@@ -18,6 +22,8 @@ if config.config_file_name is not None:
 # add your model's MetaData object here
 # for 'autogenerate' support
 from app.core.db import Base
+# Import all models so Alembic can detect them
+from app.models import User, Traveler, Trip, Quote, Policy, Claim, ChatHistory, AuditLog, RagDocument  # noqa: F401
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

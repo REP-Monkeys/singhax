@@ -51,8 +51,13 @@ app.include_router(chat_router, prefix=settings.api_v1_prefix)
 @app.on_event("startup")
 async def startup_event():
     """Initialize application on startup."""
-    # Create database tables
-    create_tables()
+    # Try to create database tables (graceful failure)
+    try:
+        create_tables()
+        print("✓ Database tables initialized")
+    except Exception as e:
+        print(f"⚠️  Database connection failed (will retry on first request): {str(e)[:100]}")
+        print("   Server will continue - chat will work without persistence")
     
     # TODO: Initialize other services (embeddings, etc.)
     print(f"🚀 {settings.project_name} v{settings.version} started")

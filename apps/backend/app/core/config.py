@@ -39,24 +39,30 @@ class Settings(BaseSettings):
     
     # LLM Configuration
     model_name: str = "llama3-8b-8192"  # Default Groq model
+    embedding_model: str = "text-embedding-3-small"
+    
+    # Groq Configuration
     groq_model: Optional[str] = None  # Alternative Groq model specification
     groq_temperature: Optional[float] = None
     groq_max_tokens: Optional[int] = None
     groq_timeout: Optional[int] = None
-    embedding_model: str = "text-embedding-3-small"
-    
-    # LangGraph Configuration
-    langgraph_checkpoint_db: Optional[str] = None
     
     # Vector Store
     vector_dimension: int = 1536  # OpenAI embedding dimension
+    
+    # LangGraph Configuration
+    # LangGraph checkpoint DB - falls back to database_url if not set
+    langgraph_checkpoint_db: Optional[str] = None
     
     # Application Settings
     debug: bool = False
     environment: str = "development"
     
+    # Frontend Configuration (optional)
+    next_public_api_url: Optional[str] = None
+    
     class Config:
-        env_file = ".env"
+        env_file = "../../.env"  # Look in project root
         case_sensitive = False
         extra = "ignore"  # Ignore extra fields from .env
 

@@ -7,6 +7,9 @@ from passlib.context import CryptContext
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from cryptography.fernet import Fernet
+import base64
+import hashlib
 
 from app.core.config import settings
 from app.core.db import get_db
@@ -14,6 +17,17 @@ from app.models.user import User
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Data encryption for sensitive information (e.g., passport numbers)
+# We use Fernet (symmetric encryption) with a key derived from the SECRET_KEY
+def _get_encryption_key() -> bytes:
+    """Generate a Fernet-compatible encryption key from the SECRET_KEY."""
+    # Derive a 32-byte key from the SECRET_KEY using SHA-256
+    key = hashlib.sha256(settings.secret_key.encode()).digest()
+    # Fernet requires a base64-encoded 32-byte key
+    return base64.urlsafe_b64encode(key)
+
+_cipher = Fernet(_get_encryption_key())
 
 # JWT token scheme
 security = HTTPBearer()
@@ -85,6 +99,42 @@ def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
     if not verify_password(password, user.hashed_password):
         return None
     return user
+
+
+def encrypt_sensitive_data(data: str) -> str:
+    """
+    Encrypt sensitive data (e.g., passport numbers) using Fernet symmetric encryption.
+
+    Args:
+        data: Plain text string to encrypt
+
+    Returns:
+        Base64-encoded encrypted string
+    """
+    if not data:
+        return data
+    encrypted_bytes = _cipher.encrypt(data.encode('utf-8'))
+    return encrypted_bytes.decode('utf-8')
+
+
+def decrypt_sensitive_data(encrypted_data: str) -> str:
+    """
+    Decrypt sensitive data that was encrypted with encrypt_sensitive_data.
+
+    Args:
+        encrypted_data: Base64-encoded encrypted string
+
+    Returns:
+        Decrypted plain text string
+    """
+    if not encrypted_data:
+        return encrypted_data
+    try:
+        decrypted_bytes = _cipher.decrypt(encrypted_data.encode('utf-8'))
+        return decrypted_bytes.decode('utf-8')
+    except Exception:
+        # If decryption fails, return empty string (corrupted or invalid data)
+        return ""
 
 
 # TODO: Implement proper session management for production
