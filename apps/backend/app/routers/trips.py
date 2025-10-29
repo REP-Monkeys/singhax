@@ -40,12 +40,19 @@ async def create_trip(
 
 @router.get("/", response_model=List[TripResponse])
 async def get_trips(
+    status: str = None,  # Filter by status: draft, ongoing, completed, past
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get user's trips."""
-    
-    trips = db.query(Trip).filter(Trip.user_id == current_user.id).all()
+    """Get user's trips, optionally filtered by status."""
+
+    query = db.query(Trip).filter(Trip.user_id == current_user.id)
+
+    if status:
+        query = query.filter(Trip.status == status)
+
+    # Order by created_at desc (newest first)
+    trips = query.order_by(Trip.created_at.desc()).all()
     return trips
 
 
