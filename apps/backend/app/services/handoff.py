@@ -3,7 +3,7 @@
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.models.user import User
 from app.models.chat_history import ChatHistory
@@ -38,7 +38,7 @@ class HandoffService:
         
         # Create handoff request
         handoff_request = {
-            "id": str(UUID()),
+            "id": str(uuid4()),
             "user_id": str(user_id),
             "user_email": user.email,
             "user_name": user.name,
@@ -82,10 +82,16 @@ class HandoffService:
         
         return requests
     
+    def get_pending_handoffs(self, db: Session) -> List[Dict[str, Any]]:
+        """Get pending handoff requests."""
+        return self.get_handoff_requests(status="pending")
+    
     def update_handoff_status(
         self,
+        db: Session,
         request_id: str,
         status: str,
+        assigned_to: Optional[str] = None,
         notes: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Update the status of a handoff request."""
@@ -93,6 +99,8 @@ class HandoffService:
         for request in self.handoff_queue:
             if request["id"] == request_id:
                 request["status"] = status
+                if assigned_to:
+                    request["assigned_to"] = assigned_to
                 if notes:
                     request["notes"] = notes
                 request["updated_at"] = datetime.utcnow().isoformat()

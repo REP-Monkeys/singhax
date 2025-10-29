@@ -1,11 +1,11 @@
 """LangGraph conversation orchestration."""
 
 from typing import Dict, Any, List, Optional, TypedDict
-from langgraph import StateGraph, END
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 from app.agents.tools import ConversationTools
+from app.core.config import settings
 
 
 class ConversationState(TypedDict):
@@ -20,6 +20,13 @@ class ConversationState(TypedDict):
     policy_question: str
     claim_type: str
     handoff_reason: str
+    # Fields expected by chat router
+    trip_details: Dict[str, Any]
+    travelers_data: Dict[str, Any]
+    preferences: Dict[str, Any]
+    awaiting_confirmation: bool
+    confirmation_received: bool
+    awaiting_field: str
 
 
 def create_conversation_graph(db) -> StateGraph:
@@ -280,11 +287,26 @@ def create_conversation_graph(db) -> StateGraph:
     graph.add_node("compliance", compliance)
     graph.add_node("customer_service", customer_service)
     
-    # Add edges
-    graph.add_edge("orchestrator", "needs_assessment")
+    # Add conditional edges from orchestrator based on intent
+    graph.add_conditional_edges(
+        "orchestrator",
+        should_continue,
+        {
+            "needs_assessment": "needs_assessment",
+            "risk_assessment": "risk_assessment",
+            "pricing": "pricing",
+            "policy_explainer": "policy_explainer",
+            "claims_guidance": "claims_guidance",
+            "customer_service": "customer_service"
+        }
+    )
+    
+    # Add edges for quote flow
     graph.add_edge("needs_assessment", "risk_assessment")
     graph.add_edge("risk_assessment", "pricing")
     graph.add_edge("pricing", "compliance")
+    
+    # Add end edges
     graph.add_edge("policy_explainer", END)
     graph.add_edge("claims_guidance", END)
     graph.add_edge("compliance", END)

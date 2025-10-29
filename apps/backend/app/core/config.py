@@ -33,12 +33,20 @@ class Settings(BaseSettings):
     
     # External APIs
     groq_api_key: Optional[str] = None
+    openai_api_key: Optional[str] = None
     stripe_secret_key: Optional[str] = None
     stripe_publishable_key: Optional[str] = None
     
     # LLM Configuration
     model_name: str = "llama3-8b-8192"  # Default Groq model
+    groq_model: Optional[str] = None  # Alternative Groq model specification
+    groq_temperature: Optional[float] = None
+    groq_max_tokens: Optional[int] = None
+    groq_timeout: Optional[int] = None
     embedding_model: str = "text-embedding-3-small"
+    
+    # LangGraph Configuration
+    langgraph_checkpoint_db: Optional[str] = None
     
     # Vector Store
     vector_dimension: int = 1536  # OpenAI embedding dimension
@@ -50,6 +58,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"  # Ignore extra fields from .env
 
 
 # Global settings instance
