@@ -33,19 +33,20 @@ class Settings(BaseSettings):
     
     # External APIs
     groq_api_key: Optional[str] = None
+    openai_api_key: Optional[str] = None
     stripe_secret_key: Optional[str] = None
     stripe_publishable_key: Optional[str] = None
     
     # LLM Configuration
-    model_name: str = "llama-3.1-70b-versatile"  # Default Groq model
+    model_name: str = "llama3-8b-8192"  # Default Groq model (from backend branch)
     embedding_model: str = "text-embedding-3-small"
     
     # Groq Configuration
-    # Groq-specific model configuration (overrides model_name for Groq calls)
-    groq_model: str = "llama-3.1-70b-versatile"
-    groq_temperature: float = 0.1
-    groq_max_tokens: int = 2000
-    groq_timeout: int = 30
+    # Groq-specific model configuration (flexible from backend branch)
+    groq_model: Optional[str] = None  # Alternative Groq model specification
+    groq_temperature: Optional[float] = None
+    groq_max_tokens: Optional[int] = None
+    groq_timeout: Optional[int] = None
     
     # Vector Store
     vector_dimension: int = 1536  # OpenAI embedding dimension
