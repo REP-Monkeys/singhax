@@ -10,6 +10,7 @@ import { CopilotPanel } from '@/components/CopilotPanel'
 import { VoiceButton } from '@/components/VoiceButton'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { useAuth } from '@/contexts/AuthContext'
+import { supabase } from '@/lib/supabase'
 
 interface Message {
   id: string
@@ -53,8 +54,9 @@ export default function QuotePage() {
 
       setIsLoadingHistory(true)
       try {
-        const token = localStorage.getItem('access_token')
-        const response = await fetch(`http://localhost:8000/api/v1/chat/session/${sessionIdParam}`, {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+        const token = await getAuthToken()
+        const response = await fetch(`${API_URL}/chat/session/${sessionIdParam}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
           },
@@ -87,6 +89,11 @@ export default function QuotePage() {
     loadChatHistory()
   }, [sessionIdParam])
 
+  const getAuthToken = async (): Promise<string | null> => {
+    const { data: { session } } = await supabase.auth.getSession()
+    return session?.access_token || null
+  }
+
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading) return
 
@@ -102,12 +109,18 @@ export default function QuotePage() {
     setIsLoading(true)
 
     try {
-      const token = localStorage.getItem('access_token')
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+      const token = await getAuthToken()
+      
+      if (!token) {
+        throw new Error('No authentication token available. Please log in again.')
+      }
+      
       let sessionId = currentSessionId
 
       // Create new session if one doesn't exist
       if (!sessionId) {
-        const sessionResponse = await fetch('http://localhost:8000/api/v1/chat/session', {
+        const sessionResponse = await fetch(`${API_URL}/chat/session`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -126,7 +139,7 @@ export default function QuotePage() {
       }
 
       // Send message to backend
-      const messageResponse = await fetch('http://localhost:8000/api/v1/chat/message', {
+      const messageResponse = await fetch(`${API_URL}/chat/message`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -139,7 +152,24 @@ export default function QuotePage() {
       })
 
       if (!messageResponse.ok) {
-        throw new Error('Failed to send message')
+        let errorDetails = {
+          status: messageResponse.status,
+          statusText: messageResponse.statusText,
+          body: null as any
+        }
+        
+        try {
+          errorDetails.body = await messageResponse.json()
+        } catch (e) {
+          try {
+            errorDetails.body = await messageResponse.text()
+          } catch (e2) {
+            errorDetails.body = 'Unable to read response body'
+          }
+        }
+        
+        console.error('❌ API Error:', errorDetails)
+        throw new Error(`Failed to send message: ${messageResponse.status} ${messageResponse.statusText}`)
       }
 
       const data = await messageResponse.json()

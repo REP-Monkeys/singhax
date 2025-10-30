@@ -7,6 +7,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 import os
 import uuid
+import dateparser
 
 from app.agents.tools import ConversationTools
 from app.agents.llm_client import GroqLLMClient
@@ -91,17 +92,45 @@ def get_or_create_checkpointer():
 
 
 def parse_date_safe(date_string: str) -> Optional[date]:
-    """Safely parse date string to date object.
+    """Safely parse date string to date object with flexible format support.
+    
+    Accepts multiple formats:
+    - YYYY-MM-DD (2025-12-15)
+    - MM/DD/YYYY (12/15/2025)
+    - DD/MM/YYYY (15/12/2025)
+    - Natural language (December 15, 2025, Dec 15, 2025)
+    - Relative dates (tomorrow, next week, in 3 days)
     
     Args:
-        date_string: Date in YYYY-MM-DD format
+        date_string: Date in any common format
         
     Returns:
         date object if parsing succeeds, None otherwise
     """
     try:
-        return datetime.strptime(date_string, "%Y-%m-%d").date()
-    except:
+        # First try standard YYYY-MM-DD for efficiency
+        if isinstance(date_string, str) and len(date_string) == 10 and date_string.count('-') == 2:
+            try:
+                return datetime.strptime(date_string, "%Y-%m-%d").date()
+            except:
+                pass
+        
+        # Use dateparser for flexible parsing
+        settings = {
+            'PREFER_DATES_FROM': 'future',  # Prefer future dates for travel
+            'RELATIVE_BASE': datetime.now(),
+            'RETURN_AS_TIMEZONE_AWARE': False,
+        }
+        
+        parsed = dateparser.parse(date_string, settings=settings)
+        
+        if parsed:
+            return parsed.date()
+        
+        return None
+        
+    except Exception as e:
+        print(f"   ⚠️ Date parsing error: {e}")
         return None
 
 
@@ -423,10 +452,6 @@ def create_conversation_graph(db) -> StateGraph:
                     state["messages"].append(AIMessage(content=response))
                     return state
             
-            # Set default for adventure_sports if not answered yet
-            if "adventure_sports" not in prefs or prefs.get("adventure_sports") is None:
-                prefs["adventure_sports"] = False
-            
             # Determine what information is still missing
             missing = []
             if not trip.get("destination"):
@@ -447,7 +472,18 @@ def create_conversation_graph(db) -> StateGraph:
             )
             
             # Generate appropriate response based on conversation state
-            if missing:
+            print(f"   🔍 Debug: missing={missing}, adventure_sports={prefs.get('adventure_sports')}, all_present={all_required_present}")
+            print(f"   🔍 Conditions: awaiting_confirmation={state.get('awaiting_confirmation')}, adventure_is_none={prefs.get('adventure_sports') is None}")
+            
+            # Check adventure_sports BEFORE checking all_required_present
+            if not state.get("awaiting_confirmation") and all_required_present and prefs.get("adventure_sports") is None:
+                print(f"   🔍 Branch: Going to ask adventure question")
+                # Ask about adventure sports if all required info is present but adventure sports not answered
+                response = "Are you planning any adventure activities like skiing, scuba diving, trekking, or bungee jumping?"
+                state["current_question"] = "adventure_sports"
+                print(f"   💬 Asking adventure question: {response}")
+            elif missing:
+                print(f"   🔍 Branch: Asking missing questions")
                 # Ask for next missing piece of information
                 if "destination" in missing:
                     response = "Where are you traveling to?"
@@ -465,13 +501,13 @@ def create_conversation_graph(db) -> StateGraph:
                     response = "How many travelers are going, and what are their ages? For example: '2 travelers, ages 30 and 8'"
                     state["current_question"] = "travelers"
                     print(f"   💬 Asking: {response}")
-            elif prefs.get("adventure_sports") is False and not state.get("awaiting_confirmation"):
-                # Ask about adventure sports if not explicitly answered
-                response = "Are you planning any adventure activities like skiing, scuba diving, trekking, or bungee jumping?"
-                state["current_question"] = "adventure_sports"
-                print(f"   💬 Asking: {response}")
             elif all_required_present and not state.get("awaiting_confirmation"):
+                print(f"   🔍 Branch: Going to confirmation")
                 # All info collected, show summary and ask for confirmation
+                # Set default for adventure_sports before showing confirmation if not answered yet
+                if "adventure_sports" not in prefs or prefs.get("adventure_sports") is None:
+                    prefs["adventure_sports"] = False
+                
                 dest = trip["destination"]
                 dep_date = trip["departure_date"]
                 ret_date = trip["return_date"]

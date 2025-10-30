@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 
 from app.core.db import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user_supabase
 from app.models.user import User
 from app.schemas.chat import (
     ChatMessageRequest,
@@ -63,7 +63,7 @@ async def test_message(
 @router.post("/message", response_model=ChatMessageResponse)
 async def send_message(
     request: ChatMessageRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_supabase),
     db: Session = Depends(get_db)
 ) -> ChatMessageResponse:
     """
