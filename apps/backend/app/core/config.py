@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     supabase_url: Optional[str] = None
     supabase_anon_key: Optional[str] = None
     supabase_service_role_key: Optional[str] = None
+    supabase_jwt_secret: Optional[str] = None  # JWT secret for verifying Supabase tokens
     
     # Security
     secret_key: str = "your-secret-key-change-in-production"

@@ -69,29 +69,35 @@ def verify_supabase_token(token: str) -> Optional[Dict[str, Any]]:
     """
     Verify and decode a Supabase JWT token.
 
-    Supabase uses the service_role_key as the JWT secret.
+    Supabase uses a JWT secret to sign tokens.
     The token contains user information in the 'sub' claim (user ID).
     """
     try:
-        # Supabase uses the service role key to sign JWTs
-        # We need to verify using the same key
-        if not settings.supabase_service_role_key:
+        # Get JWT secret - try dedicated JWT secret first, fallback to service role key
+        jwt_secret = settings.supabase_jwt_secret or settings.supabase_service_role_key
+
+        if not jwt_secret:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Supabase service role key not configured"
+                detail="Supabase JWT secret not configured"
             )
+
+        print(f"[DEBUG] Using JWT secret: {jwt_secret[:20]}... (length: {len(jwt_secret)})")
+        print(f"[DEBUG] Token first 50 chars: {token[:50]}...")
 
         # Decode and verify the Supabase JWT
         # Supabase uses HS256 algorithm
         payload = jwt.decode(
             token,
-            settings.supabase_service_role_key,
+            jwt_secret,
             algorithms=["HS256"],
             options={"verify_aud": False}  # Supabase doesn't always include audience
         )
+        print(f"[DEBUG] JWT verification successful! User ID: {payload.get('sub')}")
         return payload
     except JWTError as e:
         print(f"Supabase JWT verification failed: {e}")
+        print(f"[DEBUG] Token: {token[:100]}...")
         return None
 
 
@@ -163,8 +169,37 @@ def get_current_user_supabase(
     # Get user from database
     # The user.id in our database should match the Supabase auth.users.id
     user = db.query(User).filter(User.id == user_id).first()
+
     if user is None:
-        raise credentials_exception
+        # User exists in Supabase but not in our database
+        email = payload.get("email")
+
+        # Check if user exists with same email but different ID (old auth system)
+        existing_user = db.query(User).filter(User.email == email).first()
+
+        if existing_user:
+            # Update the existing user's ID to match Supabase
+            print(f"[DEBUG] Migrating user {existing_user.id} -> {user_id} for email {email}")
+            existing_user.id = user_id
+            db.commit()
+            db.refresh(existing_user)
+            user = existing_user
+        else:
+            # Create new user
+            print(f"[DEBUG] User {user_id} not found in database, creating...")
+            user_metadata = payload.get("user_metadata", {})
+            name = user_metadata.get("name") or email.split("@")[0] if email else "Unknown"
+
+            user = User(
+                id=user_id,
+                email=email,
+                name=name,
+                hashed_password="",  # Supabase handles auth
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            print(f"[DEBUG] User {user_id} created successfully")
 
     return user
 
