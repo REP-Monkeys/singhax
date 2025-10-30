@@ -9,6 +9,8 @@ from app.core.security import (
     authenticate_user,
     create_access_token,
     get_current_user,
+    get_current_user_supabase,
+    verify_supabase_token,
     get_password_hash,
     encrypt_sensitive_data,
     decrypt_sensitive_data
@@ -71,16 +73,16 @@ async def register(
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_supabase)
 ):
-    """Get current user information."""
+    """Get current user information using Supabase JWT."""
     return current_user
 
 
 @router.post("/onboarding", response_model=UserResponse)
 async def submit_onboarding(
     onboarding_data: OnboardingData,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_supabase),
     db: Session = Depends(get_db)
 ):
     """Submit user onboarding information."""
@@ -128,10 +130,66 @@ async def submit_onboarding(
 
 @router.get("/onboarding-status", response_model=OnboardingStatusResponse)
 async def get_onboarding_status(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_supabase)
 ):
     """Check if current user has completed onboarding."""
     return {
         "is_onboarded": current_user.is_onboarded,
         "onboarded_at": current_user.onboarded_at
     }
+
+
+@router.post("/sync-user", response_model=UserResponse)
+async def sync_user(
+    user_data: dict,
+    credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer()),
+    db: Session = Depends(get_db)
+):
+    """
+    Sync Supabase authenticated user to backend database.
+
+    This endpoint is called after a user signs up via Supabase Auth.
+    It creates or updates the user record in our backend database.
+    """
+    # Verify Supabase JWT
+    payload = verify_supabase_token(credentials.credentials)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Supabase token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Extract user info from Supabase JWT
+    supabase_user_id = payload.get("sub")
+    email = payload.get("email")
+
+    if not supabase_user_id or not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing user information in token"
+        )
+
+    # Check if user already exists in our database
+    existing_user = db.query(User).filter(User.id == supabase_user_id).first()
+
+    if existing_user:
+        # Update existing user
+        if user_data.get("name"):
+            existing_user.name = user_data["name"]
+        db.commit()
+        db.refresh(existing_user)
+        return existing_user
+    else:
+        # Create new user with Supabase ID
+        new_user = User(
+            id=supabase_user_id,  # Use Supabase user ID
+            email=email,
+            name=user_data.get("name", email.split("@")[0]),
+            hashed_password="",  # Empty since Supabase handles authentication
+        )
+
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        return new_user

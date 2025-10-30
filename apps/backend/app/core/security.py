@@ -65,29 +65,107 @@ def verify_token(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def verify_supabase_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Verify and decode a Supabase JWT token.
+
+    Supabase uses the service_role_key as the JWT secret.
+    The token contains user information in the 'sub' claim (user ID).
+    """
+    try:
+        # Supabase uses the service role key to sign JWTs
+        # We need to verify using the same key
+        if not settings.supabase_service_role_key:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Supabase service role key not configured"
+            )
+
+        # Decode and verify the Supabase JWT
+        # Supabase uses HS256 algorithm
+        payload = jwt.decode(
+            token,
+            settings.supabase_service_role_key,
+            algorithms=["HS256"],
+            options={"verify_aud": False}  # Supabase doesn't always include audience
+        )
+        return payload
+    except JWTError as e:
+        print(f"Supabase JWT verification failed: {e}")
+        return None
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
-    """Get the current authenticated user."""
+    """Get the current authenticated user (legacy - uses custom JWT)."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    
+
     payload = verify_token(credentials.credentials)
     if payload is None:
         raise credentials_exception
-    
+
     user_id: str = payload.get("sub")
     if user_id is None:
         raise credentials_exception
-    
+
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise credentials_exception
-    
+
+    return user
+
+
+def get_current_user_supabase(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    """
+    Get the current authenticated user from Supabase JWT.
+
+    This function:
+    1. Validates the Supabase JWT token
+    2. Extracts the user ID from the token
+    3. Sets the RLS context for the database session
+    4. Returns the user from the database
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    # Verify Supabase JWT token
+    payload = verify_supabase_token(credentials.credentials)
+    if payload is None:
+        raise credentials_exception
+
+    # Extract user ID from Supabase JWT (stored in 'sub' claim)
+    user_id: str = payload.get("sub")
+    if user_id is None:
+        raise credentials_exception
+
+    # Set RLS context for this database session
+    # This tells Supabase/PostgreSQL which user is making the query
+    try:
+        db.execute(f"SET LOCAL request.jwt.claims = '{payload}'")
+        db.execute(f"SET LOCAL request.jwt.claim.sub = '{user_id}'")
+    except Exception as e:
+        print(f"Warning: Failed to set RLS context: {e}")
+        # Don't fail the request if RLS context setting fails
+        # RLS policies will still work based on explicit user_id checks
+
+    # Get user from database
+    # The user.id in our database should match the Supabase auth.users.id
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise credentials_exception
+
     return user
 
 
