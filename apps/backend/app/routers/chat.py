@@ -7,6 +7,8 @@ import uuid
 from datetime import datetime
 
 from app.core.db import get_db
+from app.core.security import get_current_user
+from app.models.user import User
 from app.schemas.chat import (
     ChatMessageRequest,
     ChatMessageResponse,
@@ -61,6 +63,7 @@ async def test_message(
 @router.post("/message", response_model=ChatMessageResponse)
 async def send_message(
     request: ChatMessageRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> ChatMessageResponse:
     """
@@ -124,7 +127,11 @@ async def send_message(
         else:
             # New conversation - initialize state
             print(f"   🆕 Starting new conversation")
-            current_state = {"messages": [HumanMessage(content=request.message)]}
+            current_state = {
+                "messages": [HumanMessage(content=request.message)],
+                "user_id": str(current_user.id),
+                "session_id": request.session_id,
+            }
 
         # Invoke graph with messages - graph will handle merging with checkpoint state
         result = graph.invoke(current_state, config)
