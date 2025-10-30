@@ -6,12 +6,14 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 import os
+import uuid
 
 from app.agents.tools import ConversationTools
 from app.agents.llm_client import GroqLLMClient
 from app.services.pricing import PricingService
 from app.services.geo_mapping import GeoMapper
 from app.core.config import settings
+from app.models.trip import Trip
 
 # Singleton checkpointer to avoid connection pool conflicts
 _checkpointer_singleton = None
@@ -107,6 +109,7 @@ class ConversationState(TypedDict):
     """State for conversation graph."""
     messages: List[BaseMessage]
     user_id: str
+    session_id: str  # Chat session ID for linking to trips
     current_intent: str
     collected_slots: Dict[str, Any]
     confidence_score: float
@@ -127,6 +130,7 @@ class ConversationState(TypedDict):
     _loop_count: int  # Safety counter to prevent infinite loops
     _ready_for_pricing: bool  # Flag when ready to generate quote
     _pricing_complete: bool  # Flag when quote has been generated
+    trip_id: str  # Database trip ID (created after destination is provided)
 
 
 def create_conversation_graph(db) -> StateGraph:
@@ -242,6 +246,33 @@ def create_conversation_graph(db) -> StateGraph:
                 if current_q == "destination":
                     extracted_info = True
 
+                # Create trip in database after destination is provided (if not already created)
+                if not state.get("trip_id") and state.get("user_id") and state.get("session_id"):
+                    try:
+                        # Check if trip already exists for this session
+                        existing_trip = db.query(Trip).filter(Trip.session_id == state["session_id"]).first()
+                        if not existing_trip:
+                            new_trip = Trip(
+                                user_id=uuid.UUID(state["user_id"]),
+                                session_id=state["session_id"],
+                                status="draft",
+                                destinations=[extracted["destination"]],
+                                travelers_count=1  # Default, will update later
+                            )
+                            db.add(new_trip)
+                            db.commit()
+                            db.refresh(new_trip)
+                            state["trip_id"] = str(new_trip.id)
+                            print(f"   🆕 Created trip in database: {new_trip.id}")
+                        else:
+                            state["trip_id"] = str(existing_trip.id)
+                            # Update destination if changed
+                            existing_trip.destinations = [extracted["destination"]]
+                            db.commit()
+                            print(f"   ✅ Updated existing trip: {existing_trip.id}")
+                    except Exception as e:
+                        print(f"   ⚠️  Failed to create/update trip: {e}")
+
             if "departure_date" in extracted:
                 # Parse to date object with error handling
                 parsed_date = parse_date_safe(extracted["departure_date"])
@@ -249,6 +280,17 @@ def create_conversation_graph(db) -> StateGraph:
                     trip["departure_date"] = parsed_date
                     if current_q == "departure_date":
                         extracted_info = True
+
+                    # Update trip with start date
+                    if state.get("trip_id"):
+                        try:
+                            existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
+                            if existing_trip:
+                                existing_trip.start_date = parsed_date
+                                db.commit()
+                                print(f"   ✅ Updated trip start_date: {parsed_date}")
+                        except Exception as e:
+                            print(f"   ⚠️  Failed to update trip start_date: {e}")
                 else:
                     # Date parsing failed - will ask for clarification below
                     pass
@@ -260,6 +302,17 @@ def create_conversation_graph(db) -> StateGraph:
                     trip["return_date"] = parsed_date
                     if current_q == "return_date":
                         extracted_info = True
+
+                    # Update trip with end date
+                    if state.get("trip_id"):
+                        try:
+                            existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
+                            if existing_trip:
+                                existing_trip.end_date = parsed_date
+                                db.commit()
+                                print(f"   ✅ Updated trip end_date: {parsed_date}")
+                        except Exception as e:
+                            print(f"   ⚠️  Failed to update trip end_date: {e}")
                 else:
                     # Date parsing failed - will ask for clarification below
                     pass
@@ -272,6 +325,17 @@ def create_conversation_graph(db) -> StateGraph:
                     travelers["count"] = len(valid_ages)
                     if current_q == "travelers":
                         extracted_info = True
+
+                    # Update trip with travelers count
+                    if state.get("trip_id"):
+                        try:
+                            existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
+                            if existing_trip:
+                                existing_trip.travelers_count = len(valid_ages)
+                                db.commit()
+                                print(f"   ✅ Updated trip travelers_count: {len(valid_ages)}")
+                        except Exception as e:
+                            print(f"   ⚠️  Failed to update trip travelers_count: {e}")
             
             if "adventure_sports" in extracted:
                 prefs["adventure_sports"] = extracted["adventure_sports"]

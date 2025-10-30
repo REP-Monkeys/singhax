@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user_supabase as get_current_user
 from app.models.user import User
 from app.schemas.rag import RagSearchRequest, RagSearchResponse, RagIngestRequest
 from app.services.rag import RagService

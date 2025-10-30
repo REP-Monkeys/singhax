@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.core.db import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user_supabase as get_current_user
 from app.models.user import User
 from app.models.trip import Trip
 from app.schemas.trip import TripCreate, TripResponse

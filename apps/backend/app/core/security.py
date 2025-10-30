@@ -65,29 +65,142 @@ def verify_token(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def verify_supabase_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Verify and decode a Supabase JWT token.
+
+    Supabase uses a JWT secret to sign tokens.
+    The token contains user information in the 'sub' claim (user ID).
+    """
+    try:
+        # Get JWT secret - try dedicated JWT secret first, fallback to service role key
+        jwt_secret = settings.supabase_jwt_secret or settings.supabase_service_role_key
+
+        if not jwt_secret:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Supabase JWT secret not configured"
+            )
+
+        print(f"[DEBUG] Using JWT secret: {jwt_secret[:20]}... (length: {len(jwt_secret)})")
+        print(f"[DEBUG] Token first 50 chars: {token[:50]}...")
+
+        # Decode and verify the Supabase JWT
+        # Supabase uses HS256 algorithm
+        payload = jwt.decode(
+            token,
+            jwt_secret,
+            algorithms=["HS256"],
+            options={"verify_aud": False}  # Supabase doesn't always include audience
+        )
+        print(f"[DEBUG] JWT verification successful! User ID: {payload.get('sub')}")
+        return payload
+    except JWTError as e:
+        print(f"Supabase JWT verification failed: {e}")
+        print(f"[DEBUG] Token: {token[:100]}...")
+        return None
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
-    """Get the current authenticated user."""
+    """Get the current authenticated user (legacy - uses custom JWT)."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    
+
     payload = verify_token(credentials.credentials)
     if payload is None:
         raise credentials_exception
-    
+
     user_id: str = payload.get("sub")
     if user_id is None:
         raise credentials_exception
-    
+
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise credentials_exception
-    
+
+    return user
+
+
+def get_current_user_supabase(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    """
+    Get the current authenticated user from Supabase JWT.
+
+    This function:
+    1. Validates the Supabase JWT token
+    2. Extracts the user ID from the token
+    3. Sets the RLS context for the database session
+    4. Returns the user from the database
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    # Verify Supabase JWT token
+    payload = verify_supabase_token(credentials.credentials)
+    if payload is None:
+        raise credentials_exception
+
+    # Extract user ID from Supabase JWT (stored in 'sub' claim)
+    user_id: str = payload.get("sub")
+    if user_id is None:
+        raise credentials_exception
+
+    # Set RLS context for this database session
+    # This tells Supabase/PostgreSQL which user is making the query
+    try:
+        db.execute(f"SET LOCAL request.jwt.claims = '{payload}'")
+        db.execute(f"SET LOCAL request.jwt.claim.sub = '{user_id}'")
+    except Exception as e:
+        print(f"Warning: Failed to set RLS context: {e}")
+        # Don't fail the request if RLS context setting fails
+        # RLS policies will still work based on explicit user_id checks
+
+    # Get user from database
+    # The user.id in our database should match the Supabase auth.users.id
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if user is None:
+        # User exists in Supabase but not in our database
+        email = payload.get("email")
+
+        # Check if user exists with same email but different ID (old auth system)
+        existing_user = db.query(User).filter(User.email == email).first()
+
+        if existing_user:
+            # Update the existing user's ID to match Supabase
+            print(f"[DEBUG] Migrating user {existing_user.id} -> {user_id} for email {email}")
+            existing_user.id = user_id
+            db.commit()
+            db.refresh(existing_user)
+            user = existing_user
+        else:
+            # Create new user
+            print(f"[DEBUG] User {user_id} not found in database, creating...")
+            user_metadata = payload.get("user_metadata", {})
+            name = user_metadata.get("name") or email.split("@")[0] if email else "Unknown"
+
+            user = User(
+                id=user_id,
+                email=email,
+                name=name,
+                hashed_password="",  # Supabase handles auth
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            print(f"[DEBUG] User {user_id} created successfully")
+
     return user
 
 
