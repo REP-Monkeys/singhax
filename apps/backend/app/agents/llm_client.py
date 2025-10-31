@@ -72,10 +72,13 @@ Classify the user's intent into ONE of these categories:
    Examples: "I need insurance", "How much does it cost?", "Quote for Japan trip"
    IMPORTANT: If the assistant just asked for confirmation and user says "yes", "go ahead", "continue", "please proceed", "sounds good", etc., this is ALWAYS "quote" intent (user confirming to proceed with quote)
 
-2. "policy_explanation" - User has questions about coverage, policy terms, or what's included
+2. "purchase" - User wants to buy/purchase insurance after seeing quotes
+   Examples: "I'll take the Elite plan", "Buy it", "I want to purchase", "Checkout", "Get the standard plan"
+
+3. "policy_explanation" - User has questions about coverage, policy terms, or what's included
    Examples: "What does this cover?", "Am I covered for medical?", "Explain the policy"
 
-3. "claims_guidance" - User needs help filing a claim or has claim-related questions
+4. "claims_guidance" - User needs help filing a claim or has claim-related questions
    Examples: "How do I file a claim?", "I need to claim", "My luggage was lost"
 
 4. "document_upload" - User has uploaded a document (booking confirmation, receipt, claim document, etc.)
@@ -262,6 +265,52 @@ Extract information and call the function with the extracted data."""
             import traceback
             traceback.print_exc()
             return {}
+    
+    def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 500,
+        **kwargs
+    ) -> str:
+        """Generate completion from LLM.
+        
+        Args:
+            prompt: User prompt
+            system_prompt: System prompt for context
+            temperature: Sampling temperature (0-1)
+            max_tokens: Maximum tokens to generate
+            **kwargs: Additional parameters for the API
+            
+        Returns:
+            Generated text response
+        """
+        messages = []
+        
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        
+        messages.append({"role": "user", "content": prompt})
+        
+        try:
+            if not self.client:
+                # Fallback if client not initialized
+                return "Unable to generate response - LLM client not available."
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs
+            )
+            
+            return response.choices[0].message.content
+        
+        except Exception as e:
+            print(f"ERROR: LLM generation failed: {e}")
+            return "I'm having trouble processing your request. Please try again."
     
     def generate_conversational_response(
         self,

@@ -185,6 +185,13 @@ class ConversationState(TypedDict):
     _ready_for_pricing: bool  # Flag when ready to generate quote
     _pricing_complete: bool  # Flag when quote has been generated
     trip_id: str  # Database trip ID (created after destination is provided)
+    # Payment processing
+    _payment_intent_id: str  # Payment intent ID for tracking
+    _awaiting_payment_confirmation: bool  # Waiting for user to confirm payment
+    _policy_created: bool  # Flag when policy has been created
+    # Claims intelligence fields
+    claims_insights: Optional[Dict[str, Any]]  # Store risk analysis results
+    risk_narrative: Optional[str]  # LLM-generated risk narrative
     # OCR and document processing
     uploaded_images: List[Dict[str, Any]]  # Metadata about uploaded images/documents
     ocr_results: List[Dict[str, Any]]  # OCR extraction results
@@ -195,8 +202,8 @@ class ConversationState(TypedDict):
 def create_conversation_graph(db) -> StateGraph:
     """Create the conversation state graph."""
     
-    tools = ConversationTools(db)
     llm_client = GroqLLMClient()
+    tools = ConversationTools(db, llm_client)
     pricing_service = PricingService()
     
     def orchestrator(state: ConversationState) -> ConversationState:
@@ -761,6 +768,34 @@ Is this information correct? (yes/no)"""
             if adventure_sports is None:
                 adventure_sports = False
             
+            # Claims Intelligence Integration
+            try:
+                import logging
+                logger = logging.getLogger(__name__)
+                
+                if destination and travelers_ages:
+                    logger.info(f"🔍 Analyzing claims data for {destination}...")
+                    
+                    # Pass llm_client to tools
+                    tools_with_llm = ConversationTools(db=db, llm_client=llm_client)
+                    claims_insights = tools_with_llm.analyze_destination_risk(
+                        destination=destination,
+                        travelers_ages=travelers_ages,
+                        adventure_sports=adventure_sports
+                    )
+                    
+                    if claims_insights.get("success"):
+                        state["claims_insights"] = claims_insights
+                        state["risk_narrative"] = claims_insights.get("narrative")
+                        logger.info(f"✅ Risk: {claims_insights['risk_analysis']['risk_level']}, Tier: {claims_insights['tier_recommendation']['recommended_tier']}")
+                    else:
+                        logger.warning("Claims analysis unavailable")
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Claims analysis error: {e}")
+                # Continue without insights
+            
             # Call pricing service
             quote_result = pricing_service.calculate_step1_quote(
                 destination=destination,
@@ -851,6 +886,16 @@ Is this information correct? (yes/no)"""
             
             response_parts.append("\nAll prices are in Singapore Dollars (SGD). Would you like more details about any plan?")
             
+            # Add risk narrative if available
+            if state.get("risk_narrative"):
+                response_parts.append(f"\n\n📊 **Risk Analysis:**\n{state['risk_narrative']}")
+                
+                # Highlight recommended tier
+                if state.get("claims_insights"):
+                    recommended = state["claims_insights"]["tier_recommendation"]["recommended_tier"]
+                    if recommended != "standard":
+                        response_parts.append(f"\n\n💡 **Based on historical data, we recommend the {recommended.title()} plan for optimal coverage.**")
+            
             response = "\n".join(response_parts)
             state["messages"].append(AIMessage(content=response))
             
@@ -864,6 +909,184 @@ Is this information correct? (yes/no)"""
             
         except Exception as e:
             response = "I encountered an error calculating your quote. Let me connect you with a human agent."
+            state["requires_human"] = True
+            state["messages"].append(AIMessage(content=response))
+            return state
+    
+    def payment_processor(state: ConversationState) -> ConversationState:
+        """Process payment for insurance purchase."""
+        try:
+            print("\n💳 PAYMENT PROCESSOR NODE")
+            
+            messages = state.get("messages", [])
+            last_message = messages[-1]
+            user_input = last_message.content if hasattr(last_message, 'content') else str(last_message)
+            user_input_lower = user_input.lower()
+            
+            # Check if we're awaiting payment confirmation
+            awaiting_payment = state.get("_awaiting_payment_confirmation", False)
+            payment_intent_id = state.get("_payment_intent_id")
+            
+            if awaiting_payment and payment_intent_id:
+                # User is confirming payment completion
+                print(f"   Checking payment confirmation for: {payment_intent_id}")
+                
+                # Check if user said they paid
+                payment_keywords = ["paid", "done", "completed", "finished", "i paid", "payment done"]
+                if any(keyword in user_input_lower for keyword in payment_keywords):
+                    # Check payment status
+                    payment_result = tools.check_payment_completion(payment_intent_id)
+                    
+                    if payment_result.get("success") and payment_result.get("is_completed"):
+                        # Payment completed - create policy
+                        policy_result = tools.create_policy_from_payment(payment_intent_id)
+                        
+                        if policy_result.get("success"):
+                            policy_number = policy_result.get("policy_number")
+                            response = f"🎉 Payment successful! Your policy has been created.\n\nPolicy Number: **{policy_number}**\n\nYour travel insurance is now active. You'll receive a confirmation email shortly."
+                            state["_policy_created"] = True
+                            state["_awaiting_payment_confirmation"] = False
+                        else:
+                            response = f"Payment was successful, but there was an issue creating your policy. Please contact support. Error: {policy_result.get('error')}"
+                    elif payment_result.get("status") == "pending":
+                        response = "Still processing your payment... Please wait 10 more seconds and let me know when it's done."
+                        # Keep awaiting_payment flag set
+                    elif payment_result.get("status") == "failed":
+                        response = "Payment failed. Would you like to try again? I can generate a new payment link."
+                        state["_awaiting_payment_confirmation"] = False
+                    elif payment_result.get("status") == "expired":
+                        response = "Payment session expired. I can generate a new payment link if you'd like."
+                        state["_awaiting_payment_confirmation"] = False
+                    else:
+                        response = f"Payment status: {payment_result.get('status', 'unknown')}. Please wait a moment and try again."
+                else:
+                    # User hasn't confirmed payment yet
+                    response = "Please complete the payment using the link I provided, then let me know when it's done."
+            else:
+                # First time - create payment
+                quote_data = state.get("quote_data")
+                if not quote_data or not quote_data.get("quotes"):
+                    response = "I don't have a quote ready yet. Let me calculate your insurance options first."
+                    state["messages"].append(AIMessage(content=response))
+                    return state
+                
+                # Extract tier selection from user input
+                tier = None
+                if "premier" in user_input_lower or "premium" in user_input_lower:
+                    tier = "premier"
+                elif "elite" in user_input_lower:
+                    tier = "elite"
+                elif "standard" in user_input_lower or "basic" in user_input_lower:
+                    tier = "standard"
+                else:
+                    # Default to elite if user said "buy", "purchase", etc. without specifying
+                    tier = "elite"  # Default to recommended tier
+                
+                quotes_dict = quote_data.get("quotes", {})
+                if tier not in quotes_dict:
+                    # Fallback to available tier
+                    tier = list(quotes_dict.keys())[0] if quotes_dict else None
+                
+                if not tier:
+                    response = "I couldn't determine which plan you'd like. Please specify: Standard, Elite, or Premier."
+                    state["messages"].append(AIMessage(content=response))
+                    return state
+                
+                selected_quote = quotes_dict[tier]
+                price = selected_quote.get("price")
+                coverage = selected_quote.get("coverage", {})
+                
+                print(f"   Selected tier: {tier}, Price: ${price}")
+                
+                # Get required data from state
+                user_id = state.get("user_id")
+                trip_id = state.get("trip_id")
+                trip_details = state.get("trip_details", {})
+                travelers_data = state.get("travelers_data", {})
+                
+                if not user_id or not trip_id:
+                    response = "I need to save your quote first. Let me do that..."
+                    # TODO: Could create quote here if needed
+                    state["messages"].append(AIMessage(content=response))
+                    return state
+                
+                # Create or find Quote record
+                from app.models.quote import Quote, QuoteStatus, ProductType
+                from app.models.trip import Trip
+                
+                # Find existing quote or create new one
+                quote = db.query(Quote).filter(
+                    Quote.trip_id == uuid.UUID(trip_id),
+                    Quote.user_id == uuid.UUID(user_id)
+                ).first()
+                
+                if not quote:
+                    # Create new quote record
+                    travelers_list = [{"age": age} for age in travelers_data.get("ages", [])]
+                    activities_list = [{"type": "general"}]
+                    if state.get("preferences", {}).get("adventure_sports"):
+                        activities_list.append({"type": "adventure_sports"})
+                    
+                    quote = Quote(
+                        user_id=uuid.UUID(user_id),
+                        trip_id=uuid.UUID(trip_id),
+                        product_type=ProductType.SINGLE,
+                        travelers=travelers_list,
+                        activities=activities_list,
+                        price_firm=float(price),
+                        currency="SGD",
+                        status=QuoteStatus.FIRMED,
+                        breakdown={
+                            "tier": tier,
+                            "coverage": coverage,
+                            "price": price
+                        }
+                    )
+                    db.add(quote)
+                    db.commit()
+                    db.refresh(quote)
+                    print(f"   Created quote: {quote.id}")
+                
+                # Update quote with firm price if not set
+                if not quote.price_firm:
+                    quote.price_firm = float(price)
+                    quote.status = QuoteStatus.FIRMED
+                    quote.breakdown = {
+                        "tier": tier,
+                        "coverage": coverage,
+                        "price": price
+                    }
+                    db.commit()
+                    db.refresh(quote)
+                
+                # Create payment checkout
+                payment_result = tools.create_payment_checkout(
+                    quote_id=str(quote.id),
+                    user_id=user_id
+                )
+                
+                if not payment_result.get("success"):
+                    response = f"I encountered an issue setting up payment: {payment_result.get('error')}. Please try again or contact support."
+                    state["requires_human"] = True
+                else:
+                    checkout_url = payment_result.get("checkout_url")
+                    payment_intent_id = payment_result.get("payment_intent_id")
+                    
+                    # Store payment info in state
+                    state["_payment_intent_id"] = payment_intent_id
+                    state["_awaiting_payment_confirmation"] = True
+                    
+                    response = f"Great! I've set up your payment for the **{tier.title()}** plan (${price:.2f} SGD).\n\nPlease complete your payment at:\n{checkout_url}\n\nI'll wait here and confirm once payment is successful. This usually takes 10-30 seconds after you complete the payment."
+                
+                state["messages"].append(AIMessage(content=response))
+            
+            return state
+            
+        except Exception as e:
+            print(f"   ⚠️  Payment processor error: {e}")
+            import traceback
+            traceback.print_exc()
+            response = "I encountered an error processing the payment. Let me connect you with a human agent."
             state["requires_human"] = True
             state["messages"].append(AIMessage(content=response))
             return state
@@ -1357,12 +1580,46 @@ What would you like to know more about?"""
         current_intent = state.get("current_intent", "unknown")
         print(f"🔀 Routing #{loop_count}: intent={current_intent}")
         
-        # Priority 1: If pricing is complete, END
+        # Priority 1: If policy created, END
+        if state.get("_policy_created", False):
+            print(f"   → END (policy created)")
+            log_conversation_metrics(state)
+            return END
+        
+        # Priority 2: Payment processing
+        awaiting_payment = state.get("_awaiting_payment_confirmation", False)
+        quote_data = state.get("quote_data")
+        intent = state.get("current_intent", "")
+        
+        # Check for purchase intent (from LLM classification or keywords)
+        purchase_intent = (intent == "purchase")
+        
+        # Also check for purchase keywords if intent wasn't classified as purchase
+        if not purchase_intent:
+            messages = state.get("messages", [])
+            if messages:
+                last_msg = messages[-1]
+                user_input = last_msg.content.lower() if hasattr(last_msg, 'content') else str(last_msg).lower()
+                purchase_keywords = ["buy", "purchase", "checkout", "take it", "i'll take", "i want", "get", "proceed"]
+                purchase_intent = any(keyword in user_input for keyword in purchase_keywords)
+        
+        if awaiting_payment or (purchase_intent and quote_data and quote_data.get("quotes")):
+            print(f"   → payment_processor")
+            return "payment_processor"
+        
+        # Priority 3: If pricing is complete (but no purchase intent), END
         if state.get("_pricing_complete", False):
             print(f"   → END (pricing complete)")
             log_conversation_metrics(state)
             return END
 
+        # Priority 4: Human handoff
+        if state.get("requires_human"):
+            print(f"   → customer_service")
+            return "customer_service"
+        
+        # Priority 5: Non-quote intents
+        if intent == "policy_explanation":
         # Priority 2: Check if we're in an active quote flow first
         # If user has confirmed and we're ready for pricing, prioritize quote flow over handoff
         confirmation_received = state.get("confirmation_received", False)
@@ -1450,6 +1707,7 @@ What would you like to know more about?"""
     graph.add_node("needs_assessment", needs_assessment)
     graph.add_node("risk_assessment", risk_assessment)
     graph.add_node("pricing", pricing)
+    graph.add_node("payment_processor", payment_processor)
     graph.add_node("process_document", process_document)
     graph.add_node("policy_explainer", policy_explainer)
     graph.add_node("claims_guidance", claims_guidance)
@@ -1464,6 +1722,7 @@ What would you like to know more about?"""
             "needs_assessment": "needs_assessment",
             "risk_assessment": "risk_assessment",
             "pricing": "pricing",
+            "payment_processor": "payment_processor",
             "process_document": "process_document",
             "policy_explainer": "policy_explainer",
             "claims_guidance": "claims_guidance",
@@ -1507,6 +1766,18 @@ What would you like to know more about?"""
         "pricing",
         should_continue,
         {
+            "payment_processor": "payment_processor",
+            "customer_service": "customer_service",
+            END: END
+        }
+    )
+    
+    # Conditional edge from payment_processor (can loop for confirmation or END)
+    graph.add_conditional_edges(
+        "payment_processor",
+        should_continue,
+        {
+            "payment_processor": "payment_processor",  # Loop for payment confirmation
             "customer_service": "customer_service",
             END: END
         }

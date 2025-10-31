@@ -10,6 +10,7 @@ from .claim import Claim
 from .chat_history import ChatHistory
 from .audit_log import AuditLog
 from .rag_document import RagDocument
+from .payment import Payment
 
 __all__ = [
     "User",
@@ -21,4 +22,5 @@ __all__ = [
     "ChatHistory",
     "AuditLog",
     "RagDocument",
+    "Payment",
 ]

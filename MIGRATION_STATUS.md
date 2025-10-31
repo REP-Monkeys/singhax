@@ -22,7 +22,7 @@ could not translate host name "db.zwyibrksagddbrqiqaqf.supabase.co" to address: 
 
 The `.env` file now has:
 ```env
-DATABASE_URL=postgresql://postgres:yuexinthegoat@db.zwyibrksagddbrqiqaqf.supabase.co:5432/postgres?sslmode=require
+DATABASE_URL=postgresql://postgres:[PASSWORD]@db.zwyibrksagddbrqiqaqf.supabase.co:5432/postgres?sslmode=require
 ```
 
 You need to verify:

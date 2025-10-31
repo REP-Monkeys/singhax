@@ -58,6 +58,7 @@ class Quote(Base):
     user = relationship("User", back_populates="quotes")
     trip = relationship("Trip", back_populates="quotes")
     policies = relationship("Policy", back_populates="quote")
+    payments = relationship("Payment", back_populates="quote")
     
     def __repr__(self):
         return f"<Quote(id={self.id}, status={self.status}, price_firm={self.price_firm})>"
