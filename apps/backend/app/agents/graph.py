@@ -692,7 +692,30 @@ Is this information correct? (yes/no)"""
             
             # Store full quote result
             state["quote_data"] = quote_result
-            
+
+            # Update trip in database with total_cost (price range)
+            if state.get("trip_id"):
+                try:
+                    existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
+                    if existing_trip:
+                        quotes = quote_result["quotes"]
+                        prices = []
+                        if "standard" in quotes:
+                            prices.append(quotes["standard"]["price"])
+                        if "elite" in quotes:
+                            prices.append(quotes["elite"]["price"])
+                        if "premier" in quotes:
+                            prices.append(quotes["premier"]["price"])
+
+                        if prices:
+                            min_price = min(prices)
+                            max_price = max(prices)
+                            existing_trip.total_cost = f"SGD {min_price:.2f} - SGD {max_price:.2f}"
+                            db.commit()
+                            print(f"   ✅ Updated trip total_cost: {existing_trip.total_cost}")
+                except Exception as e:
+                    print(f"   ⚠️  Failed to update trip total_cost: {e}")
+
             # Format a beautiful response with all tiers
             quotes = quote_result["quotes"]
             dest_name = destination.title()

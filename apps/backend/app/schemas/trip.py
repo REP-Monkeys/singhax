@@ -8,8 +8,8 @@ from uuid import UUID
 
 class TripBase(BaseModel):
     """Base trip schema."""
-    start_date: date
-    end_date: date
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
     destinations: List[str]
     flight_refs: Optional[List[dict]] = []
     accommodation_refs: Optional[List[dict]] = []
@@ -35,7 +35,11 @@ class TripResponse(TripBase):
     """Schema for trip response."""
     id: UUID
     user_id: UUID
+    session_id: Optional[str] = None
+    status: str
+    travelers_count: int = 1
     created_at: datetime
+    updated_at: Optional[datetime] = None
     
     class Config:
         from_attributes = True

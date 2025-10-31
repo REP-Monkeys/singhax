@@ -12,7 +12,10 @@
       "Bash(cat:*)",
       "Bash(test:*)",
       "Bash(git checkout:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(docker-compose ps:*)",
+      "Bash(lsof:*)",
+      "Bash(kill:*)"
     ],
     "deny": [],
     "ask": []

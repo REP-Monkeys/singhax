@@ -93,6 +93,12 @@ export default function QuotePage() {
       try {
         const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
         const token = await getAuthToken()
+        
+        if (!token) {
+          throw new Error('No authentication token available. Please log in again.')
+        }
+        
+        console.log('🔍 Loading chat history for session:', sessionIdParam)
         const response = await fetch(`${API_URL}/chat/session/${sessionIdParam}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -100,10 +106,31 @@ export default function QuotePage() {
         })
 
         if (!response.ok) {
-          throw new Error('Failed to load chat history')
+          // Try to get error details from response
+          let errorMessage = 'Failed to load chat history'
+          try {
+            const errorData = await response.json()
+            errorMessage = errorData.detail || errorData.message || errorMessage
+          } catch (e) {
+            try {
+              const errorText = await response.text()
+              errorMessage = errorText || errorMessage
+            } catch (e2) {
+              errorMessage = `Failed to load chat history: ${response.status} ${response.statusText}`
+            }
+          }
+          console.error('❌ Chat history load error:', {
+            status: response.status,
+            statusText: response.statusText,
+            error: errorMessage
+          })
+          throw new Error(errorMessage)
         }
 
         const data = await response.json()
+
+        console.log('📂 Loaded session data:', data)
+        console.log('📂 Session state:', data.state)
 
         // Transform messages from API format to component format
         if (data.messages && data.messages.length > 0) {
@@ -115,9 +142,45 @@ export default function QuotePage() {
           }))
           setMessages(transformedMessages)
         }
-      } catch (error) {
-        console.error('Error loading chat history:', error)
-        // Keep default welcome message if loading fails
+
+        // Extract and populate conversation state from session state
+        if (data.state) {
+          const state = data.state
+          console.log('📊 Extracting state from session:', {
+            trip_details: state.trip_details,
+            travelers_data: state.travelers_data,
+            preferences: state.preferences,
+            quote_data: state.quote_data
+          })
+
+          // Populate conversationState similar to handleSendMessage
+          setConversationState({
+            current_intent: state.current_intent || undefined,
+            trip_details: state.trip_details || {},
+            travelers_data: state.travelers_data || {},
+            preferences: state.preferences || {},
+            quote_data: state.quote_data || undefined
+          })
+
+          console.log('✅ Populated conversationState from session history')
+        }
+      } catch (error: any) {
+        console.error('❌ Error loading chat history:', error)
+        
+        // If session not found (404), show a helpful message but don't fail completely
+        if (error.message && error.message.includes('not found')) {
+          console.warn('⚠️ Session not found, starting fresh conversation')
+          // Keep default welcome message - user can continue chatting
+        } else {
+          // For other errors, show error message to user
+          const errorMessage: Message = {
+            id: 'error-1',
+            role: 'assistant',
+            content: `I couldn't load your previous conversation. ${error.message || 'Please try refreshing the page or starting a new conversation.'}`,
+            timestamp: new Date()
+          }
+          setMessages(prev => [prev[0], errorMessage]) // Keep welcome message, add error
+        }
       } finally {
         setIsLoadingHistory(false)
       }

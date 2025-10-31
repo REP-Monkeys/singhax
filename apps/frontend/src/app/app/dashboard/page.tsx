@@ -57,19 +57,27 @@ export default function DashboardPage() {
         url += '?status=past'
       }
 
+      console.log('🔍 Fetching trips from:', url)
+
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
         },
       })
 
+      console.log('📡 Response status:', response.status)
+
       if (!response.ok) {
-        throw new Error('Failed to fetch trips')
+        const errorText = await response.text()
+        console.error('❌ Fetch failed:', errorText)
+        throw new Error(`Failed to fetch trips: ${response.status} ${errorText}`)
       }
 
       const data = await response.json()
+      console.log('✅ Fetched trips:', data)
       setTrips(data)
     } catch (err: any) {
+      console.error('❌ Error fetching trips:', err)
       setError(err.message || 'Failed to load trips')
     } finally {
       setLoading(false)
