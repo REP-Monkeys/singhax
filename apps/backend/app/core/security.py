@@ -7,6 +7,8 @@ from passlib.context import CryptContext
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from cryptography.fernet import Fernet
 import base64
 import hashlib
@@ -158,17 +160,41 @@ def get_current_user_supabase(
 
     # Set RLS context for this database session
     # This tells Supabase/PostgreSQL which user is making the query
+    # SET LOCAL is transaction-scoped, so it applies to subsequent queries in the same transaction
     try:
-        db.execute(f"SET LOCAL request.jwt.claims = '{payload}'")
-        db.execute(f"SET LOCAL request.jwt.claim.sub = '{user_id}'")
+        import json
+        # Use text() wrapper for SQLAlchemy 2.0+ compatibility
+        # Escape single quotes in JSON to prevent SQL injection
+        payload_json = json.dumps(payload).replace("'", "''")
+        db.execute(text(f"SET LOCAL request.jwt.claims = '{payload_json}'"))
+        db.execute(text(f"SET LOCAL request.jwt.claim.sub = '{user_id}'"))
+        # Flush to ensure SET LOCAL is executed before query
+        db.flush()
     except Exception as e:
         print(f"Warning: Failed to set RLS context: {e}")
         # Don't fail the request if RLS context setting fails
         # RLS policies will still work based on explicit user_id checks
+        # Rollback the SET LOCAL statements if they failed
+        try:
+            db.rollback()
+        except:
+            pass
 
     # Get user from database
     # The user.id in our database should match the Supabase auth.users.id
-    user = db.query(User).filter(User.id == user_id).first()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+    except Exception as db_error:
+        # Database connection error - provide helpful error message
+        error_msg = str(db_error)
+        if "Connection refused" in error_msg or "OperationalError" in str(type(db_error).__name__):
+            print(f"[ERROR] Database connection failed: {error_msg}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database connection failed. Please check your Supabase configuration and ensure the project is active."
+            )
+        # Re-raise other database errors
+        raise
 
     if user is None:
         # User exists in Supabase but not in our database

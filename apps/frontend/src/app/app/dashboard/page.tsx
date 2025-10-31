@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/card'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
-import { LogOut, Plus, MapPin, Calendar, Users, Plane } from 'lucide-react'
+import { LogOut, Plus, MapPin, Calendar, Users, Plane, Loader2 } from 'lucide-react'
 
 interface Trip {
   id: string
@@ -30,10 +30,163 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming')
   const [error, setError] = useState('')
+  const [destinationImages, setDestinationImages] = useState<Record<string, string>>({})
+  const [imageLoadingStates, setImageLoadingStates] = useState<Record<string, boolean>>({})
+  const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({})
+  const destinationImagesRef = useRef<Record<string, string>>({})
 
   useEffect(() => {
     fetchTrips()
   }, [activeTab])
+
+  const sanitizeDestinationName = (destination: string): string => {
+    return destination
+      .toLowerCase()
+      .replace(/[^a-z0-9\s,]/g, '')
+      .replace(/\s+/g, '_')
+      .replace(/,/g, '_')
+  }
+
+  const getPublicImageUrl = (destination: string): string | null => {
+    const sanitized = sanitizeDestinationName(destination)
+    // Check if image exists in public directory
+    return `/destination-images/${sanitized}.png`
+  }
+
+  const checkImageExists = async (url: string): Promise<boolean> => {
+    try {
+      const response = await fetch(url, { method: 'HEAD' })
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+
+  const fetchDestinationImages = useCallback(async () => {
+    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+    const uniqueDestinations = new Set<string>()
+    
+    // Collect all unique destinations
+    trips.forEach(trip => {
+      trip.destinations.forEach(dest => {
+        if (dest) uniqueDestinations.add(dest)
+      })
+    })
+
+    // Filter out destinations that already have images
+    const destinationsToFetch = Array.from(uniqueDestinations).filter(dest => {
+      return !destinationImagesRef.current[dest]
+    })
+
+    if (destinationsToFetch.length === 0) {
+      return // All images already loaded
+    }
+
+    // Initialize loading states for destinations that need images
+    const loadingStates: Record<string, boolean> = {}
+    const errorStates: Record<string, boolean> = {}
+    destinationsToFetch.forEach(dest => {
+      loadingStates[dest] = true
+      errorStates[dest] = false
+    })
+    setImageLoadingStates(prev => ({ ...prev, ...loadingStates }))
+    setImageErrors(prev => ({ ...prev, ...errorStates }))
+
+    // First, check public directory for pre-generated images
+    const publicImageChecks = await Promise.all(
+      destinationsToFetch.map(async (destination) => {
+        const publicUrl = getPublicImageUrl(destination)
+        if (publicUrl) {
+          const exists = await checkImageExists(publicUrl)
+          if (exists) {
+            setImageLoadingStates(prev => ({ ...prev, [destination]: false }))
+            setImageErrors(prev => ({ ...prev, [destination]: false }))
+            return { destination, imageUrl: publicUrl }
+          }
+        }
+        return null
+      })
+    )
+
+    // Filter out destinations that were found in public directory
+    const foundInPublic = publicImageChecks.filter(r => r !== null)
+    const remainingDestinations = destinationsToFetch.filter(
+      dest => !foundInPublic.some(f => f?.destination === dest)
+    )
+
+    // For remaining destinations, fetch from API with staggered delays
+    const apiResults = await Promise.all(
+      remainingDestinations.map(async (destination, index) => {
+        // Stagger requests by 15 seconds to avoid rate limits
+        if (index > 0) {
+          await new Promise(resolve => setTimeout(resolve, index * 15000))
+        }
+        
+        try {
+          const response = await fetch(`${backendUrl}/destination-images/${encodeURIComponent(destination)}`)
+          if (response.ok) {
+            const blob = await response.blob()
+            const imageUrl = URL.createObjectURL(blob)
+            setImageLoadingStates(prev => ({ ...prev, [destination]: false }))
+            setImageErrors(prev => ({ ...prev, [destination]: false }))
+            return { destination, imageUrl }
+          } else {
+            // Handle rate limit or other errors
+            setImageLoadingStates(prev => ({ ...prev, [destination]: false }))
+            setImageErrors(prev => ({ ...prev, [destination]: true }))
+            console.warn(`Failed to fetch image for ${destination}: ${response.status}`)
+          }
+        } catch (err) {
+          setImageLoadingStates(prev => ({ ...prev, [destination]: false }))
+          setImageErrors(prev => ({ ...prev, [destination]: true }))
+          console.error(`Failed to fetch image for ${destination}:`, err)
+        }
+        return null
+      })
+    )
+
+    // Combine public and API results
+    const allResults = [...foundInPublic, ...apiResults].filter(r => r !== null) as Array<{ destination: string; imageUrl: string }>
+
+    const imagesMap: Record<string, string> = {}
+    allResults.forEach(result => {
+      if (result) {
+        imagesMap[result.destination] = result.imageUrl
+      }
+    })
+    setDestinationImages(prev => {
+      const updated = { ...prev, ...imagesMap }
+      destinationImagesRef.current = updated
+      return updated
+    })
+  }, [trips])
+
+  useEffect(() => {
+    // Fetch images for all unique destinations
+    if (trips.length > 0) {
+      fetchDestinationImages()
+    }
+  }, [trips, fetchDestinationImages])
+
+  // Update ref when images change
+  useEffect(() => {
+    destinationImagesRef.current = destinationImages
+  }, [destinationImages])
+
+  // Cleanup blob URLs when component unmounts or images change
+  useEffect(() => {
+    return () => {
+      Object.values(destinationImages).forEach(url => {
+        if (url.startsWith('blob:')) {
+          URL.revokeObjectURL(url)
+        }
+      })
+    }
+  }, [destinationImages])
+
+  const getDestinationImageUrl = (destination: string): string | null => {
+    return destinationImages[destination] || null
+  }
 
   const fetchTrips = async () => {
     setLoading(true)
@@ -229,8 +382,46 @@ export default function DashboardPage() {
                   onClick={() => handleTripClick(trip)}
                   className="group cursor-pointer hover:shadow-lg transition-shadow duration-200 overflow-hidden border border-gray-200 rounded-xl"
                 >
-                  {/* Trip Image Placeholder */}
+                  {/* Trip Image */}
                   <div className="aspect-[4/3] bg-gradient-to-br from-blue-400 via-blue-500 to-indigo-600 relative overflow-hidden">
+                    {trip.destinations.length > 0 && getDestinationImageUrl(trip.destinations[0]) ? (
+                      <img
+                        src={getDestinationImageUrl(trip.destinations[0])!}
+                        alt={trip.destinations[0]}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          // Fallback to gradient if image fails to load
+                          const target = e.target as HTMLImageElement
+                          target.style.display = 'none'
+                        }}
+                      />
+                    ) : null}
+                    
+                    {/* Loading Indicator */}
+                    {trip.destinations.length > 0 && 
+                     imageLoadingStates[trip.destinations[0]] && 
+                     !getDestinationImageUrl(trip.destinations[0]) && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                        <div className="flex flex-col items-center gap-2">
+                          <Loader2 className="w-8 h-8 text-white animate-spin" />
+                          <p className="text-white text-sm font-medium drop-shadow">
+                            Generating image...
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Error Indicator */}
+                    {trip.destinations.length > 0 && 
+                     imageErrors[trip.destinations[0]] && 
+                     !getDestinationImageUrl(trip.destinations[0]) && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/10">
+                        <p className="text-white text-xs font-medium drop-shadow px-4 text-center">
+                          Image generation unavailable
+                        </p>
+                      </div>
+                    )}
+                    
                     <div className="absolute inset-0 bg-black/10 group-hover:bg-black/5 transition-colors" />
                     <div className="absolute top-3 right-3">
                       <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusBadge(trip.status)}`}>

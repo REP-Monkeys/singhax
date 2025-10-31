@@ -2,7 +2,9 @@
 
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from pathlib import Path
 
 from app.core.config import settings
 from app.core.db import get_db, create_tables
@@ -17,6 +19,7 @@ from app.routers import (
     voice_router,
     chat_router
 )
+from app.routers.destination_images import router as destination_images_router
 
 # Create FastAPI app
 app = FastAPI(
@@ -46,6 +49,16 @@ app.include_router(rag_router, prefix=settings.api_v1_prefix)
 app.include_router(handoff_router, prefix=settings.api_v1_prefix)
 app.include_router(voice_router, prefix=settings.api_v1_prefix)
 app.include_router(chat_router, prefix=settings.api_v1_prefix)
+app.include_router(destination_images_router, prefix=settings.api_v1_prefix)
+
+# Mount static files for destination images
+uploads_dir = Path("apps/backend/uploads")
+if uploads_dir.exists():
+    app.mount(
+        "/static/uploads",
+        StaticFiles(directory=str(uploads_dir)),
+        name="uploads"
+    )
 
 
 @app.on_event("startup")
