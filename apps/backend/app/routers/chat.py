@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Dict, Any
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 
 from app.core.db import get_db
 from app.core.security import get_current_user_supabase
@@ -21,6 +21,17 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 # Cache for conversation graph (avoid recreating on every request)
 _graph_cache: Dict[str, Any] = {}
+
+
+def serialize_dates(obj: Any) -> Any:
+    """Recursively serialize date objects to ISO format strings."""
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {key: serialize_dates(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_dates(item) for item in obj]
+    return obj
 
 
 def get_conversation_graph(db: Session):
@@ -169,20 +180,30 @@ async def send_message(
         print(f"   Destination: {quote_data.get('destination')}")
         print(f"   Tiers available: {list(quote_data.get('quotes', {}).keys())}")
     
-    # Build response with comprehensive state
+    # Build response with comprehensive state (serialize date objects)
+    trip_details_serialized = serialize_dates(result.get("trip_details", {}))
+    quote_data_serialized = serialize_dates(quote_data) if quote_data else None
+
+    # Debug: Log the state being sent to frontend
+    print(f"📤 Sending to frontend:")
+    print(f"   trip_details: {trip_details_serialized}")
+    print(f"   travelers_data: {result.get('travelers_data', {})}")
+    print(f"   preferences: {result.get('preferences', {})}")
+    print(f"   quote_data: {quote_data_serialized}")
+
     return ChatMessageResponse(
         session_id=request.session_id,
         message=agent_response,
         state={
             "current_intent": result.get("current_intent", ""),
-            "trip_details": result.get("trip_details", {}),
+            "trip_details": trip_details_serialized,
             "travelers_data": result.get("travelers_data", {}),
             "preferences": result.get("preferences", {}),
             "awaiting_confirmation": result.get("awaiting_confirmation", False),
             "confirmation_received": result.get("confirmation_received", False),
             "awaiting_field": result.get("awaiting_field", "")
         },
-        quote=quote_data,
+        quote=quote_data_serialized,
         requires_human=result.get("requires_human", False),
     )
 

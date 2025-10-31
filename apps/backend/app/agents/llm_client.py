@@ -176,8 +176,8 @@ Be decisive. Use confidence > 0.7 for clear intents, 0.5-0.7 for moderate clarit
                             "description": "List of ages for all travelers"
                         },
                         "adventure_sports": {
-                            "type": "boolean",
-                            "description": "Whether planning adventure activities like skiing, diving, etc."
+                            "type": ["boolean", "null"],
+                            "description": "Whether planning adventure activities like skiing, diving, etc. ONLY set this if EXPLICITLY mentioned by user. Leave null/undefined if not mentioned."
                         }
                     }
                 }
@@ -207,6 +207,7 @@ IMPORTANT RULES:
 4. For travelers_ages, extract all mentioned ages as integers
 5. If information is unclear or ambiguous, do NOT extract it
 6. Return ONLY the fields that you can confidently extract from this message
+7. CRITICAL: For adventure_sports, ONLY extract if the user EXPLICITLY mentions adventure activities, sports, skiing, diving, trekking, bungee jumping, or similar activities. Do NOT infer or assume False if not mentioned.
 
 Extract information and call the function with the extracted data."""
             

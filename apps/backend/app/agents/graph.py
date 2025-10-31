@@ -367,9 +367,17 @@ def create_conversation_graph(db) -> StateGraph:
                             print(f"   ⚠️  Failed to update trip travelers_count: {e}")
             
             if "adventure_sports" in extracted:
-                prefs["adventure_sports"] = extracted["adventure_sports"]
-                if current_q == "adventure_sports":
-                    extracted_info = True
+                # Only accept adventure_sports extraction if:
+                # 1. We're currently asking about adventure_sports, OR
+                # 2. The user volunteered this information (not asking about travelers)
+                if current_q == "adventure_sports" or current_q == "":
+                    prefs["adventure_sports"] = extracted["adventure_sports"]
+                    if current_q == "adventure_sports":
+                        extracted_info = True
+                    print(f"   ✅ Accepted adventure_sports: {extracted['adventure_sports']}")
+                else:
+                    # Reject spurious extraction when asking about other things
+                    print(f"   ⚠️  Rejected adventure_sports extraction (current_q={current_q})")
             
             # Clear current_question if we got the answer
             if extracted_info and current_q:
@@ -474,10 +482,16 @@ def create_conversation_graph(db) -> StateGraph:
             # Generate appropriate response based on conversation state
             print(f"   🔍 Debug: missing={missing}, adventure_sports={prefs.get('adventure_sports')}, all_present={all_required_present}")
             print(f"   🔍 Conditions: awaiting_confirmation={state.get('awaiting_confirmation')}, adventure_is_none={prefs.get('adventure_sports') is None}")
-            
-            # Check adventure_sports BEFORE checking all_required_present
-            if not state.get("awaiting_confirmation") and all_required_present and prefs.get("adventure_sports") is None:
-                print(f"   🔍 Branch: Going to ask adventure question")
+            print(f"   🔍 Current question: {state.get('current_question')}")
+
+            # Priority 1: Check adventure_sports BEFORE moving to confirmation
+            # This ensures we always ask about adventure sports after collecting required info
+            # Check if adventure_sports is either not in dict OR is None
+            adventure_not_answered = "adventure_sports" not in prefs or prefs.get("adventure_sports") is None
+            print(f"   🔍 Adventure check: 'adventure_sports' in prefs = {'adventure_sports' in prefs}, value = {prefs.get('adventure_sports')}, not_answered = {adventure_not_answered}")
+
+            if not state.get("awaiting_confirmation") and all_required_present and adventure_not_answered:
+                print(f"   ✅ Branch: Going to ask adventure question")
                 # Ask about adventure sports if all required info is present but adventure sports not answered
                 response = "Are you planning any adventure activities like skiing, scuba diving, trekking, or bungee jumping?"
                 state["current_question"] = "adventure_sports"
