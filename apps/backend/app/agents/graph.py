@@ -366,30 +366,77 @@ def create_conversation_graph(db) -> StateGraph:
                         except Exception as e:
                             print(f"   ⚠️  Failed to update trip travelers_count: {e}")
             
+            # Only accept adventure_sports extraction when:
+            # 1. We're currently asking the adventure question, OR
+            # 2. The user explicitly mentions adventure-related keywords
             if "adventure_sports" in extracted:
-                prefs["adventure_sports"] = extracted["adventure_sports"]
+                user_input_lower = user_input.lower().strip()
+                adventure_keywords = ["adventure", "skiing", "scuba", "diving", "trekking", "trek", 
+                                     "bungee", "jumping", "extreme", "sports", "hiking", "climbing", 
+                                     "skydiving", "paragliding", "rafting"]
+                mentions_adventure = any(keyword in user_input_lower for keyword in adventure_keywords)
+                
+                # Validate extracted value against user input for yes/no responses
+                # If user says yes/no but LLM extracts opposite, don't trust the extraction
                 if current_q == "adventure_sports":
-                    extracted_info = True
+                    pos_words = ["yes", "yeah", "yep", "sure", "probably", "i am", "i'm", "i will", "i'll", 
+                                "i do", "absolutely", "definitely", "i plan", "i'm planning", "i will be",
+                                "i am planning", "i do plan", "of course", "certainly", "definitely yes"]
+                    neg_words = ["no", "nope", "not", "none", "nah", "i'm not", "i am not", "i won't", "i will not",
+                                "i don't", "i do not", "absolutely not", "definitely not", "no way"]
+                    said_yes = any(word in user_input_lower for word in pos_words)
+                    said_no = any(word in user_input_lower for word in neg_words)
+                    
+                    # If user clearly said yes/no, validate extraction
+                    if said_yes and extracted["adventure_sports"] == False:
+                        print(f"   ⚠️  LLM extracted False but user said yes - ignoring extraction, will use special handling")
+                        # Don't set extracted_info, let special handling below catch it
+                    elif said_no and extracted["adventure_sports"] == True:
+                        print(f"   ⚠️  LLM extracted True but user said no - ignoring extraction, will use special handling")
+                        # Don't set extracted_info, let special handling below catch it
+                    else:
+                        # Extraction matches user intent (or no clear yes/no), accept it
+                        prefs["adventure_sports"] = extracted["adventure_sports"]
+                        extracted_info = True
+                        print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (validated against user input)")
+                elif mentions_adventure:
+                    # User mentioned adventure keywords - accept extraction
+                    prefs["adventure_sports"] = extracted["adventure_sports"]
+                    print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (user mentioned adventure keywords)")
+                else:
+                    print(f"   ⏭️  Ignoring premature adventure_sports extraction: {extracted['adventure_sports']} (not asking question, no adventure keywords)")
             
             # Clear current_question if we got the answer
             if extracted_info and current_q:
                 print(f"   ✅ Received answer for: {current_q}")
                 state["current_question"] = ""
             
-            # Special handling for adventure_sports when user says "no" but LLM doesn't extract it
-            if current_q == "adventure_sports" and not extracted_info and extracted == {}:
+            # Special handling for adventure_sports when user says yes/no but:
+            # 1. LLM doesn't extract adventure_sports, OR
+            # 2. LLM extracted it but we rejected it (wrong value)
+            # Check if we're asking the adventure question AND haven't successfully extracted it yet
+            if current_q == "adventure_sports" and not extracted_info:
                 user_input_lower = user_input.lower().strip()
+                # Expanded negative keywords
+                neg_words = ["no", "nope", "not", "none", "nah", "i'm not", "i am not", "i won't", "i will not",
+                            "i don't", "i do not", "absolutely not", "definitely not", "no way", "nothing"]
+                # Expanded positive keywords - includes phrases that indicate affirmation
+                pos_words = ["yes", "yeah", "yep", "sure", "probably", "i am", "i'm", "i will", "i'll", 
+                            "i do", "absolutely", "definitely", "i plan", "i'm planning", "i will be",
+                            "i am planning", "i do plan", "of course", "certainly", "definitely yes",
+                            "i would", "i'd like", "i want", "planning to", "going to"]
+                
                 # Check if user explicitly said no
-                if any(neg_word in user_input_lower for neg_word in ["no", "nope", "not", "none", "nah"]):
+                if any(neg_word in user_input_lower for neg_word in neg_words):
                     prefs["adventure_sports"] = False
                     extracted_info = True
                     state["current_question"] = ""
                     print(f"   ✅ Parsed 'no' for adventure_sports")
-                elif any(pos_word in user_input_lower for pos_word in ["yes", "yeah", "yep", "sure", "probably"]):
+                elif any(pos_word in user_input_lower for pos_word in pos_words):
                     prefs["adventure_sports"] = True
                     extracted_info = True
                     state["current_question"] = ""
-                    print(f"   ✅ Parsed 'yes' for adventure_sports")
+                    print(f"   ✅ Parsed 'yes' for adventure_sports (matched: {[w for w in pos_words if w in user_input_lower][:1]})")
             
             # Fallback: Simple keyword extraction if LLM didn't extract anything
             # TEMPORARILY COMMENTED OUT FOR TESTING
@@ -475,8 +522,39 @@ def create_conversation_graph(db) -> StateGraph:
             print(f"   🔍 Debug: missing={missing}, adventure_sports={prefs.get('adventure_sports')}, all_present={all_required_present}")
             print(f"   🔍 Conditions: awaiting_confirmation={state.get('awaiting_confirmation')}, adventure_is_none={prefs.get('adventure_sports') is None}")
             
-            # Check adventure_sports BEFORE checking all_required_present
-            if not state.get("awaiting_confirmation") and all_required_present and prefs.get("adventure_sports") is None:
+            # Priority: If we just answered adventure question and all required info is present, go to confirmation
+            # (This prevents asking for destination again after successfully answering adventure)
+            adventure_answered = prefs.get("adventure_sports") is not None
+            if not state.get("awaiting_confirmation") and all_required_present and adventure_answered:
+                print(f"   🔍 Branch: All info collected including adventure - going to confirmation")
+                # Set default for adventure_sports before showing confirmation if not answered yet (shouldn't happen here)
+                if "adventure_sports" not in prefs or prefs.get("adventure_sports") is None:
+                    prefs["adventure_sports"] = False
+                
+                dest = trip["destination"]
+                dep_date = trip["departure_date"]
+                ret_date = trip["return_date"]
+                duration_days = (ret_date - dep_date).days + 1
+                
+                dep_formatted = dep_date.strftime("%B %d, %Y")
+                ret_formatted = ret_date.strftime("%B %d, %Y")
+                ages = ", ".join(map(str, travelers["ages"]))
+                adv = "Yes" if prefs.get("adventure_sports") else "No"
+                
+                response = f"""Let me confirm your trip details:
+
+📍 Destination: {dest}
+📅 Travel dates: {dep_formatted} to {ret_formatted} ({duration_days} days)
+👥 Travelers: {len(travelers['ages'])} traveler(s) (ages: {ages})
+🏔️ Adventure activities: {adv}
+
+Is this information correct? (yes/no)"""
+                
+                state["awaiting_confirmation"] = True
+                state["current_question"] = "confirmation"
+                print(f"   💬 Asking for confirmation")
+            # Check adventure_sports BEFORE checking all_required_present (but only if not already answered)
+            elif not state.get("awaiting_confirmation") and all_required_present and prefs.get("adventure_sports") is None:
                 print(f"   🔍 Branch: Going to ask adventure question")
                 # Ask about adventure sports if all required info is present but adventure sports not answered
                 response = "Are you planning any adventure activities like skiing, scuba diving, trekking, or bungee jumping?"
