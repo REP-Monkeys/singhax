@@ -501,6 +501,8 @@ class ConversationTools:
                 "success": False,
                 "error": str(e),
                 "activity": activity
+            }
+    
     def extract_text_from_image(
         self,
         image_path: str,

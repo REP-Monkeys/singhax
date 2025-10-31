@@ -1618,21 +1618,13 @@ What would you like to know more about?"""
             print(f"   → customer_service")
             return "customer_service"
         
-        # Priority 5: Non-quote intents
-        if intent == "policy_explanation":
-        # Priority 2: Check if we're in an active quote flow first
+        # Check if we're in an active quote flow first
         # If user has confirmed and we're ready for pricing, prioritize quote flow over handoff
         confirmation_received = state.get("confirmation_received", False)
         ready_for_pricing = state.get("_ready_for_pricing", False)
         in_active_quote_flow = confirmation_received or ready_for_pricing or state.get("trip_details", {}).get("destination")
         
-        # Priority 3: Human handoff (but NOT if we're in active quote flow)
-        if state.get("requires_human") and not in_active_quote_flow:
-            print(f"   → customer_service (requires_human, not in quote flow)")
-            return "customer_service"
-        
-        # Priority 4: Non-quote intents
-        intent = state.get("current_intent", "")
+        # Priority 5: Non-quote intents
         if intent == "document_upload":
             print(f"   → process_document")
             return "process_document"
@@ -1647,7 +1639,7 @@ What would you like to know more about?"""
             print(f"   → customer_service (human_handoff intent, not in quote flow)")
             return "customer_service"
         
-        # Priority 5: Quote flow with clear progression
+        # Priority 6: Quote flow with clear progression
         if intent == "quote" or intent == "" or in_active_quote_flow:
             # Re-get these values (already checked above but being explicit)
             confirmation_received = state.get("confirmation_received", False)
