@@ -529,6 +529,7 @@ def create_conversation_graph(db) -> StateGraph:
             # Generate appropriate response based on conversation state
             print(f"   🔍 Debug: missing={missing}, adventure_sports={prefs.get('adventure_sports')}, all_present={all_required_present}")
             print(f"   🔍 Conditions: awaiting_confirmation={state.get('awaiting_confirmation')}, adventure_is_none={prefs.get('adventure_sports') is None}")
+            print(f"   🔍 Current question: {state.get('current_question')}")
             
             # Priority: If we just answered adventure question and all required info is present, go to confirmation
             # (This prevents asking for destination again after successfully answering adventure)
