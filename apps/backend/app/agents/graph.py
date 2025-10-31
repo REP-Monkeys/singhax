@@ -172,7 +172,7 @@ def create_conversation_graph(db) -> StateGraph:
     def orchestrator(state: ConversationState) -> ConversationState:
         """Route conversation based on LLM intent classification."""
         
-        # Initialize loop protection fields if not present
+        # Initialize loop protection
         if "_loop_count" not in state:
             state["_loop_count"] = 0
         if "_ready_for_pricing" not in state:
@@ -180,35 +180,43 @@ def create_conversation_graph(db) -> StateGraph:
         if "_pricing_complete" not in state:
             state["_pricing_complete"] = False
         
-        try:
-            last_message = state["messages"][-1]
-            user_input = last_message.content.lower()
-            
-            # Simple intent classification without LLM for debugging
-            if any(word in user_input for word in ["insurance", "quote", "travel", "trip"]):
-                state["current_intent"] = "quote"
-                state["confidence_score"] = 0.9
-            elif any(word in user_input for word in ["policy", "coverage", "terms"]):
-                state["current_intent"] = "policy_explanation"
-                state["confidence_score"] = 0.8
-            elif any(word in user_input for word in ["claim", "file", "reimbursement"]):
-                state["current_intent"] = "claims_guidance"
-                state["confidence_score"] = 0.8
-            else:
-                state["current_intent"] = "quote"  # Default to quote
-                state["confidence_score"] = 0.7
-            
-            # Check if human handoff needed (low confidence)
-            if state["confidence_score"] < 0.6:
-                state["requires_human"] = True
-            
-            return state
-        except Exception as e:
-            # On error, default to quote intent
+        state["_loop_count"] += 1
+        print(f"\n{'='*60}")
+        print(f"🔀 ORCHESTRATOR (iteration {state['_loop_count']})")
+        print(f"{'='*60}")
+        
+        messages = state.get("messages", [])
+        if not messages:
             state["current_intent"] = "quote"
-            state["confidence_score"] = 0.5
-            state["requires_human"] = False
             return state
+        
+        last_message = messages[-1]
+        user_message = last_message.content if hasattr(last_message, 'content') else str(last_message)
+        
+        # Get conversation history for context
+        history = []
+        for msg in messages[-5:]:  # Last 5 messages
+            content = msg.content if hasattr(msg, 'content') else str(msg)
+            history.append(content)
+        
+        # Use LLM to classify intent
+        intent_result = llm_client.classify_intent(user_message, history)
+        
+        intent = intent_result["intent"]
+        confidence = intent_result["confidence"]
+        
+        state["current_intent"] = intent
+        state["confidence_score"] = confidence
+        
+        print(f"Intent: {intent} (confidence: {confidence:.2f})")
+        
+        # Check if human handoff needed (low confidence)
+        if confidence < 0.6:
+            state["requires_human"] = True
+        else:
+            state["requires_human"] = False
+        
+        return state
     
     def needs_assessment(state: ConversationState) -> ConversationState:
         """Collect trip information through structured 6-question conversation."""
@@ -366,30 +374,77 @@ def create_conversation_graph(db) -> StateGraph:
                         except Exception as e:
                             print(f"   ⚠️  Failed to update trip travelers_count: {e}")
             
+            # Only accept adventure_sports extraction when:
+            # 1. We're currently asking the adventure question, OR
+            # 2. The user explicitly mentions adventure-related keywords
             if "adventure_sports" in extracted:
-                prefs["adventure_sports"] = extracted["adventure_sports"]
+                user_input_lower = user_input.lower().strip()
+                adventure_keywords = ["adventure", "skiing", "scuba", "diving", "trekking", "trek", 
+                                     "bungee", "jumping", "extreme", "sports", "hiking", "climbing", 
+                                     "skydiving", "paragliding", "rafting"]
+                mentions_adventure = any(keyword in user_input_lower for keyword in adventure_keywords)
+                
+                # Validate extracted value against user input for yes/no responses
+                # If user says yes/no but LLM extracts opposite, don't trust the extraction
                 if current_q == "adventure_sports":
-                    extracted_info = True
+                    pos_words = ["yes", "yeah", "yep", "sure", "probably", "i am", "i'm", "i will", "i'll", 
+                                "i do", "absolutely", "definitely", "i plan", "i'm planning", "i will be",
+                                "i am planning", "i do plan", "of course", "certainly", "definitely yes"]
+                    neg_words = ["no", "nope", "not", "none", "nah", "i'm not", "i am not", "i won't", "i will not",
+                                "i don't", "i do not", "absolutely not", "definitely not", "no way"]
+                    said_yes = any(word in user_input_lower for word in pos_words)
+                    said_no = any(word in user_input_lower for word in neg_words)
+                    
+                    # If user clearly said yes/no, validate extraction
+                    if said_yes and extracted["adventure_sports"] == False:
+                        print(f"   ⚠️  LLM extracted False but user said yes - ignoring extraction, will use special handling")
+                        # Don't set extracted_info, let special handling below catch it
+                    elif said_no and extracted["adventure_sports"] == True:
+                        print(f"   ⚠️  LLM extracted True but user said no - ignoring extraction, will use special handling")
+                        # Don't set extracted_info, let special handling below catch it
+                    else:
+                        # Extraction matches user intent (or no clear yes/no), accept it
+                        prefs["adventure_sports"] = extracted["adventure_sports"]
+                        extracted_info = True
+                        print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (validated against user input)")
+                elif mentions_adventure:
+                    # User mentioned adventure keywords - accept extraction
+                    prefs["adventure_sports"] = extracted["adventure_sports"]
+                    print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (user mentioned adventure keywords)")
+                else:
+                    print(f"   ⏭️  Ignoring premature adventure_sports extraction: {extracted['adventure_sports']} (not asking question, no adventure keywords)")
             
             # Clear current_question if we got the answer
             if extracted_info and current_q:
                 print(f"   ✅ Received answer for: {current_q}")
                 state["current_question"] = ""
             
-            # Special handling for adventure_sports when user says "no" but LLM doesn't extract it
-            if current_q == "adventure_sports" and not extracted_info and extracted == {}:
+            # Special handling for adventure_sports when user says yes/no but:
+            # 1. LLM doesn't extract adventure_sports, OR
+            # 2. LLM extracted it but we rejected it (wrong value)
+            # Check if we're asking the adventure question AND haven't successfully extracted it yet
+            if current_q == "adventure_sports" and not extracted_info:
                 user_input_lower = user_input.lower().strip()
+                # Expanded negative keywords
+                neg_words = ["no", "nope", "not", "none", "nah", "i'm not", "i am not", "i won't", "i will not",
+                            "i don't", "i do not", "absolutely not", "definitely not", "no way", "nothing"]
+                # Expanded positive keywords - includes phrases that indicate affirmation
+                pos_words = ["yes", "yeah", "yep", "sure", "probably", "i am", "i'm", "i will", "i'll", 
+                            "i do", "absolutely", "definitely", "i plan", "i'm planning", "i will be",
+                            "i am planning", "i do plan", "of course", "certainly", "definitely yes",
+                            "i would", "i'd like", "i want", "planning to", "going to"]
+                
                 # Check if user explicitly said no
-                if any(neg_word in user_input_lower for neg_word in ["no", "nope", "not", "none", "nah"]):
+                if any(neg_word in user_input_lower for neg_word in neg_words):
                     prefs["adventure_sports"] = False
                     extracted_info = True
                     state["current_question"] = ""
                     print(f"   ✅ Parsed 'no' for adventure_sports")
-                elif any(pos_word in user_input_lower for pos_word in ["yes", "yeah", "yep", "sure", "probably"]):
+                elif any(pos_word in user_input_lower for pos_word in pos_words):
                     prefs["adventure_sports"] = True
                     extracted_info = True
                     state["current_question"] = ""
-                    print(f"   ✅ Parsed 'yes' for adventure_sports")
+                    print(f"   ✅ Parsed 'yes' for adventure_sports (matched: {[w for w in pos_words if w in user_input_lower][:1]})")
             
             # Fallback: Simple keyword extraction if LLM didn't extract anything
             # TEMPORARILY COMMENTED OUT FOR TESTING
@@ -475,8 +530,39 @@ def create_conversation_graph(db) -> StateGraph:
             print(f"   🔍 Debug: missing={missing}, adventure_sports={prefs.get('adventure_sports')}, all_present={all_required_present}")
             print(f"   🔍 Conditions: awaiting_confirmation={state.get('awaiting_confirmation')}, adventure_is_none={prefs.get('adventure_sports') is None}")
             
-            # Check adventure_sports BEFORE checking all_required_present
-            if not state.get("awaiting_confirmation") and all_required_present and prefs.get("adventure_sports") is None:
+            # Priority: If we just answered adventure question and all required info is present, go to confirmation
+            # (This prevents asking for destination again after successfully answering adventure)
+            adventure_answered = prefs.get("adventure_sports") is not None
+            if not state.get("awaiting_confirmation") and all_required_present and adventure_answered:
+                print(f"   🔍 Branch: All info collected including adventure - going to confirmation")
+                # Set default for adventure_sports before showing confirmation if not answered yet (shouldn't happen here)
+                if "adventure_sports" not in prefs or prefs.get("adventure_sports") is None:
+                    prefs["adventure_sports"] = False
+                
+                dest = trip["destination"]
+                dep_date = trip["departure_date"]
+                ret_date = trip["return_date"]
+                duration_days = (ret_date - dep_date).days + 1
+                
+                dep_formatted = dep_date.strftime("%B %d, %Y")
+                ret_formatted = ret_date.strftime("%B %d, %Y")
+                ages = ", ".join(map(str, travelers["ages"]))
+                adv = "Yes" if prefs.get("adventure_sports") else "No"
+                
+                response = f"""Let me confirm your trip details:
+
+📍 Destination: {dest}
+📅 Travel dates: {dep_formatted} to {ret_formatted} ({duration_days} days)
+👥 Travelers: {len(travelers['ages'])} traveler(s) (ages: {ages})
+🏔️ Adventure activities: {adv}
+
+Is this information correct? (yes/no)"""
+                
+                state["awaiting_confirmation"] = True
+                state["current_question"] = "confirmation"
+                print(f"   💬 Asking for confirmation")
+            # Check adventure_sports BEFORE checking all_required_present (but only if not already answered)
+            elif not state.get("awaiting_confirmation") and all_required_present and prefs.get("adventure_sports") is None:
                 print(f"   🔍 Branch: Going to ask adventure question")
                 # Ask about adventure sports if all required info is present but adventure sports not answered
                 response = "Are you planning any adventure activities like skiing, scuba diving, trekking, or bungee jumping?"
@@ -665,25 +751,92 @@ Is this information correct? (yes/no)"""
             return state
     
     def policy_explainer(state: ConversationState) -> ConversationState:
-        """Provide policy explanations using RAG."""
+        """
+        Answer policy questions using mock policy knowledge base.
+        """
         
-        last_message = state["messages"][-1]
-        user_input = last_message.content
+        print("\n📚 POLICY EXPLAINER NODE")
         
-        # Search policy documents
-        search_result = tools.search_policy_documents(user_input)
+        messages = state.get("messages", [])
+        last_message = messages[-1]
+        user_question = last_message.content if hasattr(last_message, 'content') else str(last_message)
         
-        if search_result["success"] and search_result["results"]:
-            response_parts = []
-            for result in search_result["results"][:2]:  # Limit to 2 results
-                response_parts.append(f"{result['text']}\nSource: §{result['section_id']}")
-            
-            response = "\n\n".join(response_parts)
+        print(f"   Question: {user_question[:100]}...")
+        
+        # Mock policy knowledge base (replace with real RAG later)
+        policy_kb = {
+            "medical": {
+                "coverage": "Medical coverage includes emergency medical treatment, hospitalization, and medical evacuation up to policy limits.",
+                "limits": "Standard: $50,000 | Elite: $100,000 | Premier: $200,000",
+                "exclusions": "Pre-existing conditions (unless declared), cosmetic procedures, routine checkups"
+            },
+            "cancellation": {
+                "coverage": "Trip cancellation covers non-refundable expenses if you must cancel due to covered reasons.",
+                "reasons": "Serious illness, injury, death of traveler/family, natural disasters, travel warnings",
+                "limits": "Standard: $5,000 | Elite: $10,000 | Premier: $15,000"
+            },
+            "baggage": {
+                "coverage": "Baggage coverage includes loss, theft, or damage to personal belongings.",
+                "limits": "Standard: $3,000 | Elite: $5,000 | Premier: $10,000",
+                "exclusions": "Cash, jewelry over $500, electronics over $1,000 (unless declared)"
+            },
+            "adventure": {
+                "coverage": "Adventure sports coverage available in Elite and Premier plans.",
+                "included": "Skiing, scuba diving (certified), hiking, zip-lining",
+                "excluded": "Base jumping, solo climbing, motor sports",
+                "requirement": "Must select Elite or Premier plan and declare activities"
+            },
+            "pre-existing": {
+                "coverage": "Pre-existing conditions can be covered if declared and accepted.",
+                "process": "Declare conditions during application, underwriting review, additional premium may apply",
+                "exclusions": "Conditions not declared, terminal illnesses, ongoing treatment required"
+            }
+        }
+        
+        # Simple keyword matching to find relevant policy section
+        question_lower = user_question.lower()
+        
+        relevant_sections = []
+        
+        if any(word in question_lower for word in ["medical", "hospital", "doctor", "treatment", "sick", "injured"]):
+            relevant_sections.append(("Medical Coverage", policy_kb["medical"]))
+        
+        if any(word in question_lower for word in ["cancel", "cancellation", "refund", "can't go"]):
+            relevant_sections.append(("Trip Cancellation", policy_kb["cancellation"]))
+        
+        if any(word in question_lower for word in ["bag", "luggage", "lost", "stolen", "damage"]):
+            relevant_sections.append(("Baggage Coverage", policy_kb["baggage"]))
+        
+        if any(word in question_lower for word in ["adventure", "sport", "ski", "dive", "scuba", "hiking"]):
+            relevant_sections.append(("Adventure Sports", policy_kb["adventure"]))
+        
+        if any(word in question_lower for word in ["pre-existing", "condition", "medical history"]):
+            relevant_sections.append(("Pre-existing Conditions", policy_kb["pre-existing"]))
+        
+        # Build response
+        if relevant_sections:
+            response = "Based on our policy:\n\n"
+            for section_name, section_data in relevant_sections:
+                response += f"**{section_name}:**\n"
+                for key, value in section_data.items():
+                    response += f"• {key.title()}: {value}\n"
+                response += "\n"
+            response += "Do you have any other questions about coverage?"
         else:
-            response = "I couldn't find specific information about that in our policy documents. Let me connect you with a human agent for assistance."
-            state["requires_human"] = True
+            response = """I can help explain our travel insurance policy. Here are common topics:
+
+- **Medical Coverage** - Emergency treatment and hospitalization
+- **Trip Cancellation** - Non-refundable expenses if you must cancel
+- **Baggage** - Lost, stolen, or damaged belongings
+- **Adventure Sports** - Coverage for activities (Elite/Premier plans)
+- **Pre-existing Conditions** - How we handle medical history
+
+What would you like to know more about?"""
         
         state["messages"].append(AIMessage(content=response))
+        state["policy_question"] = user_question
+        
+        print(f"   ✅ Answered with {len(relevant_sections)} relevant sections")
         
         return state
     
@@ -754,6 +907,31 @@ Is this information correct? (yes/no)"""
         
         return state
     
+    def log_conversation_metrics(state: ConversationState):
+        """Log metrics for analytics."""
+        
+        messages = state.get("messages", [])
+        intent = state.get("current_intent", "")
+        quote_data = state.get("quote_data")
+        
+        metrics = {
+            "session_id": state.get("session_id", "unknown"),
+            "message_count": len(messages),
+            "intent": intent,
+            "quote_generated": quote_data is not None,
+            "loop_count": state.get("_loop_count", 0),
+            "human_handoff": state.get("requires_human", False)
+        }
+        
+        print(f"\n📊 CONVERSATION METRICS:")
+        for key, value in metrics.items():
+            print(f"   {key}: {value}")
+        
+        # TODO: Send to analytics service (Mixpanel, Segment, etc.)
+        # For now, just log to console
+        
+        return metrics
+    
     def should_continue(state: ConversationState) -> str:
         """Determine next step with loop protection and clear exit conditions."""
         
@@ -777,6 +955,7 @@ Is this information correct? (yes/no)"""
         # Priority 1: If pricing is complete, END
         if state.get("_pricing_complete", False):
             print(f"   → END (pricing complete)")
+            log_conversation_metrics(state)
             return END
 
         # Priority 2: Human handoff
@@ -813,6 +992,7 @@ Is this information correct? (yes/no)"""
             # If pricing already complete, we're done
             if pricing_complete or has_quote:
                 print(f"   → END (quote exists)")
+                log_conversation_metrics(state)
                 return END
             
             # CRITICAL FIX: If we're waiting for user response, check if last message is from user
@@ -835,6 +1015,7 @@ Is this information correct? (yes/no)"""
                     return "pricing"
                 else:
                     print(f"   → END")
+                    log_conversation_metrics(state)
                     return END
             
             # Otherwise, continue collecting info

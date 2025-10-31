@@ -3,6 +3,7 @@
 import os
 from typing import List, Optional
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 
 
 class Settings(BaseSettings):
@@ -62,10 +63,11 @@ class Settings(BaseSettings):
     # Frontend Configuration (optional)
     next_public_api_url: Optional[str] = None
     
-    class Config:
-        env_file = "../../.env"  # Look in project root
-        case_sensitive = False
-        extra = "ignore"  # Ignore extra fields from .env
+    model_config = ConfigDict(
+        env_file="../../.env",  # Look in project root
+        case_sensitive=False,
+        extra="ignore"  # Ignore extra fields from .env
+    )
 
 
 # Global settings instance

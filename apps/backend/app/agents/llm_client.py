@@ -24,67 +24,86 @@ class GroqLLMClient:
             max_tokens=settings.groq_max_tokens or 500,
             timeout=settings.groq_timeout or 30,
         )
+        # Add direct Groq client for intent classification
+        self.client = Groq(api_key=settings.groq_api_key) if settings.groq_api_key else None
+        self.model = settings.groq_model or settings.model_name
     
     def classify_intent(
         self,
-        user_message: str,
-        conversation_history: List[BaseMessage]
+        message: str,
+        conversation_history: List[str] = None
     ) -> Dict[str, Any]:
-        """Classify user intent using LLM with fallback to keyword matching.
+        """Classify user intent using LLM with conversation context.
         
         Args:
-            user_message: The current user message to classify
-            conversation_history: Previous messages for context
+            message: The current user message to classify
+            conversation_history: Previous messages as List[str] for context
             
         Returns:
             Dictionary with keys:
-                - intent (str): Classified intent
+                - intent (str): "quote" | "policy_explanation" | "claims_guidance" | "human_handoff"
                 - confidence (float): Confidence score 0-1
                 - reasoning (str): Explanation of classification
         """
         try:
-            # Build system prompt for intent classification
-            system_prompt = """You are an intent classifier for a travel insurance chatbot.
+            # Build context from conversation history
+            context = ""
+            if conversation_history:
+                recent = conversation_history[-3:]  # Last 3 messages
+                context = "\n".join([f"- {msg}" for msg in recent])
+            
+            prompt = f"""You are an intent classifier for a travel insurance chatbot.
+
+Conversation history:
+{context if context else "No previous messages"}
+
+Current user message: "{message}"
 
 Classify the user's intent into ONE of these categories:
-- "quote": User wants to get a travel insurance quote or price
-- "policy_explanation": User has questions about policy coverage or terms
-- "claims_guidance": User needs help filing or understanding claims
-- "human_handoff": User explicitly requests to speak with a human agent
-- "general_inquiry": Unclear intent or general questions
 
-Respond with a JSON object containing:
-{
-    "intent": "<one of the categories above>",
-    "confidence": <float between 0 and 1>,
-    "reasoning": "<brief explanation>"
-}
+1. "quote" - User wants to get a travel insurance quote or pricing information
+   Examples: "I need insurance", "How much does it cost?", "Quote for Japan trip"
 
-Be decisive. Use confidence > 0.7 for clear intents, 0.5-0.7 for moderate clarity, < 0.5 for very unclear."""
+2. "policy_explanation" - User has questions about coverage, policy terms, or what's included
+   Examples: "What does this cover?", "Am I covered for medical?", "Explain the policy"
+
+3. "claims_guidance" - User needs help filing a claim or has claim-related questions
+   Examples: "How do I file a claim?", "I need to claim", "My luggage was lost"
+
+4. "human_handoff" - Complex question, complaint, or unclear intent
+   Examples: "This is confusing", "Let me speak to someone", unclear messages
+
+Respond with ONLY a valid JSON object:
+{{
+    "intent": "quote",
+    "confidence": 0.95,
+    "reasoning": "User explicitly asks for insurance quote"
+}}"""
+
+            if not self.client:
+                # Fallback if client not initialized
+                return self._fallback_intent_classification(message)
             
-            # Include last 3 messages from history for context
-            context_messages = conversation_history[-3:] if len(conversation_history) > 3 else conversation_history
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=150
+            )
             
-            # Build message list
-            messages = [SystemMessage(content=system_prompt)]
-            messages.extend(context_messages)
-            messages.append(HumanMessage(content=user_message))
+            result = json.loads(response.choices[0].message.content.strip())
             
-            # Invoke LLM
-            response = self.llm.invoke(messages)
+            print(f"🎯 Intent Classification:")
+            print(f"   Intent: {result['intent']}")
+            print(f"   Confidence: {result['confidence']}")
+            print(f"   Reasoning: {result['reasoning']}")
             
-            # Parse JSON response
-            result = json.loads(response.content)
-            
-            return {
-                "intent": result.get("intent", "general_inquiry"),
-                "confidence": float(result.get("confidence", 0.5)),
-                "reasoning": result.get("reasoning", "LLM classification")
-            }
+            return result
             
         except Exception as e:
-            # Fallback to keyword-based classification
-            return self._fallback_intent_classification(user_message)
+            print(f"⚠️  LLM intent classification failed: {e}")
+            # Fallback to keyword matching
+            return self._fallback_intent_classification(message)
     
     def _fallback_intent_classification(self, user_message: str) -> Dict[str, Any]:
         """Fallback keyword-based intent classification.
@@ -95,46 +114,15 @@ Be decisive. Use confidence > 0.7 for clear intents, 0.5-0.7 for moderate clarit
         Returns:
             Dictionary with intent, confidence, and reasoning
         """
-        user_lower = user_message.lower()
-        
-        # Check for quote-related keywords
-        if any(word in user_lower for word in ["quote", "price", "cost", "insurance", "how much"]):
-            return {
-                "intent": "quote",
-                "confidence": 0.7,
-                "reasoning": "Keyword-based classification"
-            }
-        
-        # Check for policy-related keywords
-        if any(word in user_lower for word in ["policy", "coverage", "what does", "covered", "include"]):
-            return {
-                "intent": "policy_explanation",
-                "confidence": 0.7,
-                "reasoning": "Keyword-based classification"
-            }
-        
-        # Check for claims-related keywords
-        if any(word in user_lower for word in ["claim", "file", "refund", "reimburse", "submit"]):
-            return {
-                "intent": "claims_guidance",
-                "confidence": 0.7,
-                "reasoning": "Keyword-based classification"
-            }
-        
-        # Check for human handoff keywords
-        if any(word in user_lower for word in ["human", "agent", "person", "support", "help me"]):
-            return {
-                "intent": "human_handoff",
-                "confidence": 0.9,
-                "reasoning": "Keyword-based classification"
-            }
-        
-        # Default to general inquiry
-        return {
-            "intent": "general_inquiry",
-            "confidence": 0.5,
-            "reasoning": "Keyword-based classification (default)"
-        }
+        message_lower = user_message.lower()
+        if any(word in message_lower for word in ["quote", "price", "cost", "insurance", "coverage amount"]):
+            return {"intent": "quote", "confidence": 0.6, "reasoning": "Keyword fallback"}
+        elif any(word in message_lower for word in ["cover", "policy", "included", "excluded"]):
+            return {"intent": "policy_explanation", "confidence": 0.6, "reasoning": "Keyword fallback"}
+        elif any(word in message_lower for word in ["claim", "refund", "reimburs"]):
+            return {"intent": "claims_guidance", "confidence": 0.6, "reasoning": "Keyword fallback"}
+        else:
+            return {"intent": "quote", "confidence": 0.5, "reasoning": "Default fallback"}
     
     def extract_trip_info(
         self,
