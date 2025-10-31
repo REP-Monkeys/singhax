@@ -2,11 +2,13 @@
 
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
+from pathlib import Path
 
 from app.services.pricing import PricingService
 from app.services.rag import RagService
 from app.services.claims import ClaimsService
 from app.services.handoff import HandoffService
+from app.services.ocr import OCRService
 
 
 class ConversationTools:
@@ -18,6 +20,7 @@ class ConversationTools:
         self.rag_service = RagService()
         self.claims_service = ClaimsService()
         self.handoff_service = HandoffService()
+        self.ocr_service = OCRService()
     
     def get_quote_range(
         self,
@@ -132,3 +135,69 @@ class ConversationTools:
     def get_handoff_reasons(self) -> List[Dict[str, str]]:
         """Get available handoff reasons."""
         return self.handoff_service.get_handoff_reasons()
+    
+    def extract_text_from_image(
+        self,
+        image_path: str,
+        language: str = 'eng'
+    ) -> Dict[str, Any]:
+        """
+        Extract text from an image file using OCR.
+        
+        Args:
+            image_path: Path to the image file (relative to uploads directory or absolute)
+            language: Tesseract language code (default: 'eng')
+            
+        Returns:
+            Dictionary with:
+            - success: bool
+            - text: Extracted text
+            - confidence: Average confidence score
+            - word_count: Number of words
+            - error: Error message if processing failed
+        """
+        try:
+            # Resolve path - check if it's relative to uploads or absolute
+            path = Path(image_path)
+            if not path.is_absolute():
+                # Try relative to uploads directory
+                uploads_path = Path("apps/backend/uploads/temp") / path
+                if uploads_path.exists():
+                    path = uploads_path
+                else:
+                    uploads_path = Path("apps/backend/uploads/documents") / path
+                    if uploads_path.exists():
+                        path = uploads_path
+            
+            if not path.exists():
+                return {
+                    "success": False,
+                    "text": "",
+                    "confidence": 0.0,
+                    "word_count": 0,
+                    "error": f"Image file not found: {image_path}"
+                }
+            
+            # Read file and extract text
+            with open(path, 'rb') as f:
+                file_bytes = f.read()
+            
+            result = self.ocr_service.extract_text(
+                file_bytes,
+                path.name,
+                language=language
+            )
+            
+            # Add success flag
+            result["success"] = result.get("error") is None
+            
+            return result
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "text": "",
+                "confidence": 0.0,
+                "word_count": 0,
+                "error": f"OCR processing failed: {str(e)}"
+            }

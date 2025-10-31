@@ -1,0 +1,79 @@
+{
+  "session_id": "test-session",
+  "document_type": "itinerary",
+  "extracted_at": "2025-10-31T16:06:18.683778Z",
+  "source_filename": "itinerary.pdf",
+  "trip_overview": {
+    "title": "Japan Tour",
+    "duration_days": null,
+    "start_date": "2025-03-17",
+    "end_date": null,
+    "confidence": 0.8
+  },
+  "destinations": [
+    {
+      "city": null,
+      "country": "Japan",
+      "arrival_date": "2025-03-17",
+      "departure_date": null,
+      "nights": null,
+      "confidence": 0.81
+    }
+  ],
+  "activities": [
+    {
+      "date": "2025-03-17",
+      "location": "Japan",
+      "activity_type": "adventure",
+      "description": "Skiing",
+      "is_adventure_sport": true,
+      "risk_level": "medium",
+      "requires_special_coverage": null,
+      "confidence": 0.9
+    }
+  ],
+  "adventure_sports_detected": {
+    "has_adventure_sports": true,
+    "activities": [
+      {
+        "type": "skiing",
+        "date": "2025-03-17",
+        "location": "Japan",
+        "risk_level": "medium",
+        "confidence": 0.9
+      }
+    ],
+    "confidence": 0.9
+  },
+  "risk_factors": {
+    "extreme_sports": null,
+    "water_sports": null,
+    "winter_sports": true,
+    "high_altitude_activities": null,
+    "motorized_sports": null,
+    "group_travel": null,
+    "remote_locations": null,
+    "political_risk_destinations": null,
+    "confidence": 0.8
+  },
+  "travelers": [],
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [
+    "activities[0].confidence",
+    "activities[0].confidence",
+    "adventure_sports_detected.activities[0].confidence",
+    "adventure_sports_detected.activities[0].confidence",
+    "adventure_sports_detected.confidence"
+  ],
+  "low_confidence_fields": [
+    "trip_overview.confidence",
+    "destinations[0].confidence",
+    "destinations[0].confidence",
+    "risk_factors.confidence"
+  ],
+  "missing_fields": []
+}

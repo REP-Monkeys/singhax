@@ -1,0 +1,43 @@
+{
+  "session_id": "test-session",
+  "document_type": "itinerary",
+  "extracted_at": "2025-10-31T16:06:19.913382Z",
+  "source_filename": "flight.pdf",
+  "trip_overview": {
+    "title": "Flight to Japan",
+    "duration_days": null,
+    "start_date": null,
+    "end_date": null,
+    "confidence": 0.8
+  },
+  "destinations": [
+    {
+      "city": null,
+      "country": "Japan",
+      "arrival_date": null,
+      "departure_date": null,
+      "nights": null,
+      "confidence": 0.81
+    }
+  ],
+  "activities": [],
+  "adventure_sports_detected": {
+    "has_adventure_sports": false,
+    "activities": [],
+    "confidence": 0.8
+  },
+  "travelers": [],
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [],
+  "low_confidence_fields": [
+    "trip_overview.confidence",
+    "destinations[0].confidence",
+    "destinations[0].confidence",
+    "adventure_sports_detected.confidence"
+  ],
+  "missing_fields": []
+}

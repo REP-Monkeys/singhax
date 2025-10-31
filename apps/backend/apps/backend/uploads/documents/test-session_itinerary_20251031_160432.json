@@ -1,0 +1,72 @@
+{
+  "session_id": "test-session",
+  "document_type": "itinerary",
+  "extracted_at": "2025-10-31T16:04:32.598701Z",
+  "source_filename": "flight.pdf",
+  "trip_overview": {
+    "title": "Flight to Japan",
+    "duration_days": null,
+    "start_date": null,
+    "end_date": null,
+    "confidence": 0.8
+  },
+  "destinations": [
+    {
+      "city": null,
+      "country": "Japan",
+      "arrival_date": null,
+      "departure_date": null,
+      "nights": null,
+      "confidence": 0.81
+    }
+  ],
+  "activities": [],
+  "adventure_sports_detected": {
+    "has_adventure_sports": false,
+    "activities": [],
+    "confidence": 0.8
+  },
+  "risk_factors": {
+    "extreme_sports": false,
+    "water_sports": false,
+    "winter_sports": false,
+    "high_altitude_activities": false,
+    "motorized_sports": false,
+    "group_travel": null,
+    "remote_locations": false,
+    "political_risk_destinations": false,
+    "confidence": 0.8
+  },
+  "trip_characteristics": {
+    "is_group_tour": null,
+    "is_solo_travel": null,
+    "group_size": null,
+    "includes_children": null,
+    "includes_seniors": null,
+    "confidence": 0.8
+  },
+  "travelers": [],
+  "trip_structure": {
+    "trip_type": null,
+    "number_of_destinations": null,
+    "requires_internal_travel": null,
+    "internal_transport": null,
+    "confidence": 0.8
+  },
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [],
+  "low_confidence_fields": [
+    "trip_overview.confidence",
+    "destinations[0].confidence",
+    "destinations[0].confidence",
+    "adventure_sports_detected.confidence",
+    "risk_factors.confidence",
+    "trip_characteristics.confidence",
+    "trip_structure.confidence"
+  ],
+  "missing_fields": []
+}

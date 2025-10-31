@@ -1,0 +1,98 @@
+{
+  "session_id": "7775b51b-54aa-4026-b202-e349980260f0",
+  "document_type": "flight_confirmation",
+  "extracted_at": "2025-10-31T16:22:38.271417Z",
+  "source_filename": "sample_flight_booking.pdf",
+  "airline": {
+    "name": "Singapore Airlines",
+    "code": "SQ",
+    "confidence": 0.99
+  },
+  "flight_details": {
+    "departure": {
+      "date": "2025-12-15",
+      "time": "10:30",
+      "airport_code": "SIN",
+      "airport_name": "Changi Airport",
+      "confidence": 0.98
+    },
+    "return": null,
+    "flight_numbers": {
+      "outbound": "SQ638",
+      "inbound": null,
+      "confidence": 0.96
+    }
+  },
+  "destination": {
+    "country": "Japan",
+    "city": "Tokyo",
+    "airport_code": "NRT",
+    "confidence": 0.97
+  },
+  "travelers": [
+    {
+      "name": {
+        "first": "Yuki",
+        "last": "Tanaka",
+        "full": "Tanaka Yuki",
+        "confidence": 0.96
+      },
+      "ticket": {
+        "ticket_number": null,
+        "class": {
+          "service_class": "Economy",
+          "code": null,
+          "confidence": 0.94
+        },
+        "seat_assignment": "32A",
+        "seat_type": null,
+        "cost": null,
+        "confidence": 0.92
+      }
+    }
+  ],
+  "trip_value": {
+    "total_cost": {
+      "amount": 850.0,
+      "currency": "SGD",
+      "confidence": 0.95
+    },
+    "breakdown": [
+      {
+        "traveler": "Tanaka Yuki",
+        "amount": 850.0,
+        "currency": "SGD",
+        "class": "Economy",
+        "confidence": 0.92
+      }
+    ]
+  },
+  "booking_reference": {
+    "pnr": "SQ7K8P",
+    "booking_number": null,
+    "confidence": 0.98
+  },
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [
+    "airline.confidence",
+    "flight_details.departure.confidence",
+    "flight_details.flight_numbers.confidence",
+    "destination.confidence",
+    "travelers[0].name.confidence",
+    "travelers[0].ticket.class.confidence",
+    "travelers[0].ticket.confidence",
+    "travelers[0].name.confidence",
+    "travelers[0].ticket.class.confidence",
+    "travelers[0].ticket.confidence",
+    "trip_value.total_cost.confidence",
+    "trip_value.breakdown[0].confidence",
+    "trip_value.breakdown[0].confidence",
+    "booking_reference.confidence"
+  ],
+  "low_confidence_fields": [],
+  "missing_fields": []
+}

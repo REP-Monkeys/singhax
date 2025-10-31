@@ -41,11 +41,18 @@ class GroqLLMClient:
             
         Returns:
             Dictionary with keys:
-                - intent (str): "quote" | "policy_explanation" | "claims_guidance" | "human_handoff"
+                - intent (str): "quote" | "policy_explanation" | "claims_guidance" | "document_upload" | "human_handoff"
                 - confidence (float): Confidence score 0-1
                 - reasoning (str): Explanation of classification
         """
         try:
+            # Check if message contains OCR text or document upload indicators
+            has_document_upload = (
+                "[User uploaded a document" in message or
+                "Extracted text:" in message or
+                "uploaded a document" in message.lower()
+            )
+            
             # Build context from conversation history
             context = ""
             if conversation_history:
@@ -57,12 +64,13 @@ class GroqLLMClient:
 Conversation history:
 {context if context else "No previous messages"}
 
-Current user message: "{message}"
+Current user message: "{message[:500]}"  # Truncate very long messages
 
 Classify the user's intent into ONE of these categories:
 
 1. "quote" - User wants to get a travel insurance quote or pricing information
    Examples: "I need insurance", "How much does it cost?", "Quote for Japan trip"
+   IMPORTANT: If the assistant just asked for confirmation and user says "yes", "go ahead", "continue", "please proceed", "sounds good", etc., this is ALWAYS "quote" intent (user confirming to proceed with quote)
 
 2. "policy_explanation" - User has questions about coverage, policy terms, or what's included
    Examples: "What does this cover?", "Am I covered for medical?", "Explain the policy"
@@ -70,8 +78,12 @@ Classify the user's intent into ONE of these categories:
 3. "claims_guidance" - User needs help filing a claim or has claim-related questions
    Examples: "How do I file a claim?", "I need to claim", "My luggage was lost"
 
-4. "human_handoff" - Complex question, complaint, or unclear intent
-   Examples: "This is confusing", "Let me speak to someone", unclear messages
+4. "document_upload" - User has uploaded a document (booking confirmation, receipt, claim document, etc.)
+   Examples: Messages containing "[User uploaded a document", "Extracted text:", booking confirmations, receipts, medical reports
+
+5. "human_handoff" - User EXPLICITLY requests to speak with a human agent, has a complaint, or the message is completely unclear/unrelated
+   Examples: "I want to speak to a person", "This is too complicated", "Connect me to support"
+   CRITICAL: Do NOT classify continuation/confirmation messages ("go ahead", "continue", "yes", "please proceed") as human_handoff if they're responding to a quote confirmation request
 
 Respond with ONLY a valid JSON object:
 {{
@@ -115,6 +127,18 @@ Respond with ONLY a valid JSON object:
             Dictionary with intent, confidence, and reasoning
         """
         message_lower = user_message.lower()
+        
+        # Check for continuation/confirmation messages - these should be quote intent
+        continuation_words = ["go ahead", "continue", "proceed", "yes", "yeah", "sounds good", "looks good", "correct", "confirm"]
+        if any(word in message_lower for word in continuation_words):
+            return {"intent": "quote", "confidence": 0.7, "reasoning": "Continuation/confirmation keyword fallback"}
+        
+        # Check for explicit human handoff requests
+        handoff_words = ["speak to", "talk to", "human", "agent", "person", "support", "complaint"]
+        if any(word in message_lower for word in handoff_words) and len(message_lower.split()) < 10:
+            # Only classify as handoff if it's a short message (likely explicit request)
+            return {"intent": "human_handoff", "confidence": 0.6, "reasoning": "Human handoff keyword fallback"}
+        
         if any(word in message_lower for word in ["quote", "price", "cost", "insurance", "coverage amount"]):
             return {"intent": "quote", "confidence": 0.6, "reasoning": "Keyword fallback"}
         elif any(word in message_lower for word in ["cover", "policy", "included", "excluded"]):
@@ -122,6 +146,7 @@ Respond with ONLY a valid JSON object:
         elif any(word in message_lower for word in ["claim", "refund", "reimburs"]):
             return {"intent": "claims_guidance", "confidence": 0.6, "reasoning": "Keyword fallback"}
         else:
+            # Default to quote for ambiguous messages (better than human handoff)
             return {"intent": "quote", "confidence": 0.5, "reasoning": "Default fallback"}
     
     def extract_trip_info(
@@ -152,11 +177,11 @@ Respond with ONLY a valid JSON object:
                         },
                         "departure_date": {
                             "type": "string",
-                            "description": "Trip start date in YYYY-MM-DD format"
+                            "description": "Trip start date in YYYY-MM-DD format. For dates without year (e.g., '25 jan'), use the NEXT occurrence if we're past that month, otherwise use current year. Always ensure departure_date is in the future."
                         },
                         "return_date": {
                             "type": "string",
-                            "description": "Trip end date in YYYY-MM-DD format"
+                            "description": "Trip end date in YYYY-MM-DD format. Must be AFTER departure_date. For dates without year (e.g., '30 jan'), use the same year as departure_date unless that would make it in the past, then use next year."
                         },
                         "travelers_ages": {
                             "type": "array",
@@ -192,10 +217,17 @@ IMPORTANT RULES:
 1. ONLY extract NEW information from the user's message
 2. Do NOT override existing information unless the user is explicitly correcting it
 3. For dates, be lenient with formats but always convert to YYYY-MM-DD
-4. For travelers_ages, extract all mentioned ages as integers
-5. If information is unclear or ambiguous, do NOT extract it
-6. Return ONLY the fields that you can confidently extract from this message
-7. CRITICAL: For adventure_sports, ONLY extract if the user EXPLICITLY mentions adventure activities, sports, skiing, diving, trekking, bungee jumping, or similar activities. Do NOT infer or assume False if not mentioned.
+4. DATE HANDLING CRITICAL:
+   - If user gives dates without year (e.g., "25 jan to 30 jan"), infer the correct year:
+     * If current month is past the mentioned month, use NEXT year
+     * If current month is before or same as mentioned month, use CURRENT year (if still in future) or NEXT year
+   - departure_date MUST be in the future relative to current date
+   - return_date MUST be AFTER departure_date
+   - Examples: "25 jan to 30 jan" in November 2025 → "2026-01-25" to "2026-01-30"
+5. For travelers_ages, extract all mentioned ages as integers
+6. If information is unclear or ambiguous, do NOT extract it
+7. Return ONLY the fields that you can confidently extract from this message
+8. CRITICAL: For adventure_sports, ONLY extract if the user EXPLICITLY mentions adventure activities, sports, skiing, diving, trekking, bungee jumping, or similar activities. Do NOT infer or assume False if not mentioned.
 
 Extract information and call the function with the extracted data."""
             

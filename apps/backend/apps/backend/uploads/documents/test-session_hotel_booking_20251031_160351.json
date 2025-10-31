@@ -1,0 +1,32 @@
+{
+  "session_id": "test-session",
+  "document_type": "hotel_booking",
+  "extracted_at": "2025-10-31T16:03:51.285363Z",
+  "source_filename": "hotel.pdf",
+  "hotel_details": {
+    "name": "Grand Tokyo Hotel",
+    "chain": null,
+    "star_rating": null,
+    "confidence": 0.92
+  },
+  "location": {},
+  "booking_dates": {
+    "check_in": {
+      "date": "2025-03-15",
+      "time": null,
+      "confidence": 0.93
+    }
+  },
+  "guests": [],
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [
+    "hotel_details.confidence",
+    "booking_dates.check_in.confidence"
+  ],
+  "low_confidence_fields": [],
+  "missing_fields": []
+}
