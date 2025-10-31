@@ -3,7 +3,7 @@
 import os
 from typing import List, Optional
 from pydantic_settings import BaseSettings
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 
 class Settings(BaseSettings):
@@ -18,6 +18,20 @@ class Settings(BaseSettings):
     # Database - Supabase
     database_url: str = "postgresql://postgres:password@localhost:5432/convo_travel_insure"
     database_test_url: str = "postgresql://postgres:password@localhost:5432/convo_travel_insure_test"
+    
+    # Claims Database Configuration
+    claims_database_url: Optional[str] = Field(
+        default=None,
+        description="PostgreSQL URL for MSIG claims database"
+    )
+    enable_claims_intelligence: bool = Field(
+        default=True,
+        description="Enable claims intelligence features"
+    )
+    claims_cache_ttl: int = Field(
+        default=3600,
+        description="Claims data cache TTL in seconds"
+    )
     
     # Supabase Configuration
     supabase_url: Optional[str] = None

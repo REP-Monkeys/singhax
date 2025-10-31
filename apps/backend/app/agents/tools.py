@@ -9,18 +9,29 @@ from app.services.rag import RagService
 from app.services.claims import ClaimsService
 from app.services.handoff import HandoffService
 from app.services.payment import PaymentService
+from app.services.claims_intelligence import ClaimsIntelligenceService, ClaimsAnalyzer, NarrativeGenerator
 
 
 class ConversationTools:
     """Tools available to conversation agents."""
     
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, llm_client=None):
         self.db = db
         self.pricing_service = PricingService()
         self.rag_service = RagService()
         self.claims_service = ClaimsService()
         self.handoff_service = HandoffService()
         self.payment_service = PaymentService()
+        
+        # Initialize claims intelligence services if llm_client provided
+        if llm_client:
+            self.claims_intelligence_service = ClaimsIntelligenceService()
+            self.claims_analyzer = ClaimsAnalyzer(self.claims_intelligence_service)
+            self.narrative_generator = NarrativeGenerator(llm_client)
+        else:
+            self.claims_intelligence_service = None
+            self.claims_analyzer = None
+            self.narrative_generator = None
     
     def get_quote_range(
         self,
@@ -353,3 +364,138 @@ class ConversationTools:
             "policy_number": policy_number,
             "policy_id": str(policy.id)
         }
+    
+    def analyze_destination_risk(
+        self,
+        destination: str,
+        travelers_ages: List[int],
+        adventure_sports: bool
+    ) -> Dict[str, Any]:
+        """
+        Analyze risk for a destination using historical claims data.
+        
+        This tool queries the MSIG claims database to provide data-backed
+        risk assessment and coverage recommendations.
+        
+        Args:
+            destination: Destination country (e.g., "Japan", "Thailand")
+            travelers_ages: List of traveler ages
+            adventure_sports: Whether adventure sports are planned
+        
+        Returns:
+            Dictionary with risk analysis, tier recommendation, and narrative
+        """
+        if not self.claims_intelligence_service or not self.claims_analyzer:
+            return {
+                "success": False,
+                "error": "Claims intelligence not initialized",
+                "destination": destination
+            }
+        
+        try:
+            # Get destination statistics
+            stats = self.claims_intelligence_service.get_destination_stats(destination)
+            
+            # Calculate risk score
+            risk_analysis = self.claims_analyzer.calculate_risk_score(
+                destination=destination,
+                travelers_ages=travelers_ages,
+                adventure_sports=adventure_sports
+            )
+            
+            # Get tier recommendation
+            tier_recommendation = self.claims_analyzer.recommend_tier(
+                destination=destination,
+                risk_score=risk_analysis["risk_score"],
+                adventure_sports=adventure_sports
+            )
+            
+            # Generate narrative
+            user_profile = {
+                "ages": travelers_ages,
+                "adventure_sports": adventure_sports,
+                "duration_days": "unknown"  # Can be added if available
+            }
+            
+            narrative = self.narrative_generator.generate_risk_narrative(
+                destination=destination,
+                stats=stats,
+                risk_analysis=risk_analysis,
+                tier_recommendation=tier_recommendation,
+                user_profile=user_profile
+            )
+            
+            return {
+                "success": True,
+                "destination": destination,
+                "stats": stats,
+                "risk_analysis": risk_analysis,
+                "tier_recommendation": tier_recommendation,
+                "narrative": narrative,
+                "data_available": stats.get("data_available", True)
+            }
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error analyzing destination risk: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "destination": destination,
+                "data_available": False
+            }
+    
+    def check_adventure_coverage(
+        self,
+        destination: str,
+        activity: str
+    ) -> Dict[str, Any]:
+        """
+        Check if adventure sports are covered and analyze specific risks.
+        
+        Args:
+            destination: Destination country
+            activity: Activity type (e.g., "skiing", "diving", "hiking")
+        
+        Returns:
+            Dictionary with adventure risk analysis
+        """
+        if not self.claims_intelligence_service:
+            return {
+                "success": False,
+                "error": "Claims intelligence not initialized",
+                "activity": activity
+            }
+        
+        try:
+            adventure_data = self.claims_intelligence_service.analyze_adventure_risk(
+                destination=destination,
+                activity=activity
+            )
+            
+            # Determine if activity requires premium coverage
+            requires_premium = activity.lower() in [
+                "skiing", "snowboarding", "scuba diving", "diving", "skydiving",
+                "bungee jumping", "rock climbing", "paragliding", "parasailing"
+            ]
+            
+            return {
+                "success": True,
+                "activity": activity,
+                "destination": destination,
+                "requires_premium_coverage": requires_premium,
+                "adventure_data": adventure_data,
+                "minimum_tier": "elite" if requires_premium else "standard",
+                "reasoning": f"{activity.title()} is classified as an adventurous activity" if requires_premium else f"{activity.title()} is covered under all tiers"
+            }
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error checking adventure coverage: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "activity": activity
+            }

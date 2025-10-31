@@ -164,13 +164,16 @@ class ConversationState(TypedDict):
     _payment_intent_id: str  # Payment intent ID for tracking
     _awaiting_payment_confirmation: bool  # Waiting for user to confirm payment
     _policy_created: bool  # Flag when policy has been created
+    # Claims intelligence fields
+    claims_insights: Optional[Dict[str, Any]]  # Store risk analysis results
+    risk_narrative: Optional[str]  # LLM-generated risk narrative
 
 
 def create_conversation_graph(db) -> StateGraph:
     """Create the conversation state graph."""
     
-    tools = ConversationTools(db)
     llm_client = GroqLLMClient()
+    tools = ConversationTools(db, llm_client)
     pricing_service = PricingService()
     
     def orchestrator(state: ConversationState) -> ConversationState:
@@ -670,6 +673,34 @@ Is this information correct? (yes/no)"""
             if adventure_sports is None:
                 adventure_sports = False
             
+            # Claims Intelligence Integration
+            try:
+                import logging
+                logger = logging.getLogger(__name__)
+                
+                if destination and travelers_ages:
+                    logger.info(f"🔍 Analyzing claims data for {destination}...")
+                    
+                    # Pass llm_client to tools
+                    tools_with_llm = ConversationTools(db=db, llm_client=llm_client)
+                    claims_insights = tools_with_llm.analyze_destination_risk(
+                        destination=destination,
+                        travelers_ages=travelers_ages,
+                        adventure_sports=adventure_sports
+                    )
+                    
+                    if claims_insights.get("success"):
+                        state["claims_insights"] = claims_insights
+                        state["risk_narrative"] = claims_insights.get("narrative")
+                        logger.info(f"✅ Risk: {claims_insights['risk_analysis']['risk_level']}, Tier: {claims_insights['tier_recommendation']['recommended_tier']}")
+                    else:
+                        logger.warning("Claims analysis unavailable")
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Claims analysis error: {e}")
+                # Continue without insights
+            
             # Call pricing service
             quote_result = pricing_service.calculate_step1_quote(
                 destination=destination,
@@ -736,6 +767,16 @@ Is this information correct? (yes/no)"""
 """)
             
             response_parts.append("\nAll prices are in Singapore Dollars (SGD). Would you like more details about any plan?")
+            
+            # Add risk narrative if available
+            if state.get("risk_narrative"):
+                response_parts.append(f"\n\n📊 **Risk Analysis:**\n{state['risk_narrative']}")
+                
+                # Highlight recommended tier
+                if state.get("claims_insights"):
+                    recommended = state["claims_insights"]["tier_recommendation"]["recommended_tier"]
+                    if recommended != "standard":
+                        response_parts.append(f"\n\n💡 **Based on historical data, we recommend the {recommended.title()} plan for optimal coverage.**")
             
             response = "\n".join(response_parts)
             state["messages"].append(AIMessage(content=response))
