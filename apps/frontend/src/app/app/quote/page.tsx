@@ -19,6 +19,42 @@ interface Message {
   timestamp: Date
 }
 
+interface TripDetails {
+  destination?: string
+  departure_date?: string
+  return_date?: string
+  area?: string
+  base_rate?: number
+}
+
+interface TravelersData {
+  count?: number
+  ages?: number[]
+}
+
+interface Preferences {
+  adventure_sports?: boolean
+}
+
+interface QuoteData {
+  destination?: string
+  departure_date?: string
+  return_date?: string
+  quotes?: {
+    standard?: { total_premium: number }
+    elite?: { total_premium: number }
+    premier?: { total_premium: number }
+  }
+}
+
+interface ConversationState {
+  current_intent?: string
+  trip_details?: TripDetails
+  travelers_data?: TravelersData
+  preferences?: Preferences
+  quote_data?: QuoteData
+}
+
 export default function QuotePage() {
   const { user, logout } = useAuth()
   const searchParams = useSearchParams()
@@ -37,6 +73,7 @@ export default function QuotePage() {
   const [isLoading, setIsLoading] = useState(false)
   const [isLoadingHistory, setIsLoadingHistory] = useState(false)
   const [isVoiceActive, setIsVoiceActive] = useState(false)
+  const [conversationState, setConversationState] = useState<ConversationState>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -182,6 +219,27 @@ export default function QuotePage() {
       }
 
       setMessages(prev => [...prev, assistantMessage])
+
+      // Update conversation state for real-time UI updates
+      if (data.state) {
+        console.log('📊 Received state from backend:', data.state)
+        console.log('📊 Quote data:', data.quote)
+
+        setConversationState({
+          current_intent: data.state.current_intent,
+          trip_details: data.state.trip_details || {},
+          travelers_data: data.state.travelers_data || {},
+          preferences: data.state.preferences || {},
+          quote_data: data.quote || undefined
+        })
+
+        console.log('✅ Updated conversationState:', {
+          trip_details: data.state.trip_details,
+          travelers_data: data.state.travelers_data,
+          preferences: data.state.preferences,
+          quote_data: data.quote
+        })
+      }
     } catch (error) {
       console.error('Error sending message:', error)
 
@@ -340,7 +398,7 @@ export default function QuotePage() {
 
           {/* Copilot Panel */}
           <div className="lg:col-span-1">
-            <CopilotPanel />
+            <CopilotPanel conversationState={conversationState} />
           </div>
         </div>
       </div>

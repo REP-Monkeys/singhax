@@ -10,10 +10,18 @@ interface VoiceButtonProps {
   onActiveChange: (active: boolean) => void
 }
 
+// Extend Window interface for speech recognition
+declare global {
+  interface Window {
+    SpeechRecognition: any
+    webkitSpeechRecognition: any
+  }
+}
+
 export function VoiceButton({ onTranscript, isActive, onActiveChange }: VoiceButtonProps) {
   const [isRecording, setIsRecording] = useState(false)
   const [transcript, setTranscript] = useState('')
-  const recognitionRef = useRef<SpeechRecognition | null>(null)
+  const recognitionRef = useRef<any>(null)
 
   const startRecording = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
@@ -33,7 +41,7 @@ export function VoiceButton({ onTranscript, isActive, onActiveChange }: VoiceBut
       onActiveChange(true)
     }
 
-    recognitionRef.current.onresult = (event) => {
+    recognitionRef.current.onresult = (event: any) => {
       let finalTranscript = ''
       let interimTranscript = ''
 
@@ -58,7 +66,7 @@ export function VoiceButton({ onTranscript, isActive, onActiveChange }: VoiceBut
       }
     }
 
-    recognitionRef.current.onerror = (event) => {
+    recognitionRef.current.onerror = (event: any) => {
       console.error('Speech recognition error:', event.error)
       setIsRecording(false)
       onActiveChange(false)
@@ -97,12 +105,4 @@ export function VoiceButton({ onTranscript, isActive, onActiveChange }: VoiceBut
       )}
     </Button>
   )
-}
-
-// Extend Window interface for TypeScript
-declare global {
-  interface Window {
-    SpeechRecognition: typeof SpeechRecognition
-    webkitSpeechRecognition: typeof SpeechRecognition
-  }
 }
