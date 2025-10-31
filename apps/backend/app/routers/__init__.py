@@ -9,6 +9,7 @@ from .rag import router as rag_router
 from .handoff import router as handoff_router
 from .voice import router as voice_router
 from .chat import router as chat_router
+from .payments import router as payments_router
 
 __all__ = [
     "auth_router",
@@ -20,4 +21,5 @@ __all__ = [
     "handoff_router",
     "voice_router",
     "chat_router",
+    "payments_router",
 ]

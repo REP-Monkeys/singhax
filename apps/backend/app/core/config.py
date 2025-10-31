@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = None
     stripe_secret_key: Optional[str] = None
     stripe_publishable_key: Optional[str] = None
+    stripe_webhook_secret: Optional[str] = None  # For webhook signature verification
+    
+    # Payment Configuration
+    payment_success_url: str = "http://localhost:8085/success?session_id={CHECKOUT_SESSION_ID}"
+    payment_cancel_url: str = "http://localhost:8085/cancel"
     
     # LLM Configuration
     model_name: str = "llama3-8b-8192"  # Default Groq model

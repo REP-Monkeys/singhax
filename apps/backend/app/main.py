@@ -15,7 +15,8 @@ from app.routers import (
     rag_router,
     handoff_router,
     voice_router,
-    chat_router
+    chat_router,
+    payments_router
 )
 
 # Create FastAPI app
@@ -46,6 +47,7 @@ app.include_router(rag_router, prefix=settings.api_v1_prefix)
 app.include_router(handoff_router, prefix=settings.api_v1_prefix)
 app.include_router(voice_router, prefix=settings.api_v1_prefix)
 app.include_router(chat_router, prefix=settings.api_v1_prefix)
+app.include_router(payments_router, prefix=settings.api_v1_prefix)
 
 
 @app.on_event("startup")

@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Dict, Any
 import uuid
+import asyncio
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 from app.core.db import get_db
 from app.core.security import get_current_user_supabase
@@ -21,6 +23,9 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 # Cache for conversation graph (avoid recreating on every request)
 _graph_cache: Dict[str, Any] = {}
+
+# Thread pool executor for running synchronous graph operations
+_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="graph_exec")
 
 
 def get_conversation_graph(db: Session):
@@ -126,10 +131,27 @@ async def send_message(
             }
 
         # Invoke graph with messages - graph will handle merging with checkpoint state
-        result = graph.invoke(current_state, config)
+        # Run in thread pool executor to prevent blocking the async event loop
+        result = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                _executor, graph.invoke, current_state, config
+            ),
+            timeout=30.0
+        )
         
         print(f"✅ Graph execution complete")
         
+    except asyncio.TimeoutError:
+        print(f"⏱️  Graph execution timeout (30s limit exceeded)")
+        # Return graceful timeout message to user
+        return ChatMessageResponse(
+            session_id=request.session_id,
+            message="I'm taking longer than expected to process your request. Please try again or rephrase your question.",
+            state={},
+            quote=None,
+            requires_human=True
+        )
+    
     except RecursionError as e:
         print(f"❌ Recursion limit hit: {e}")
         # Return graceful error to user

@@ -54,6 +54,7 @@ class User(Base):
     trips = relationship("Trip", back_populates="user")
     quotes = relationship("Quote", back_populates="user")
     policies = relationship("Policy", back_populates="user")
+    payments = relationship("Payment", back_populates="user")
     chat_history = relationship("ChatHistory", back_populates="user")
     audit_logs = relationship("AuditLog", back_populates="user")
     

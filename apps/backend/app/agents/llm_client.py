@@ -64,13 +64,16 @@ Classify the user's intent into ONE of these categories:
 1. "quote" - User wants to get a travel insurance quote or pricing information
    Examples: "I need insurance", "How much does it cost?", "Quote for Japan trip"
 
-2. "policy_explanation" - User has questions about coverage, policy terms, or what's included
+2. "purchase" - User wants to buy/purchase insurance after seeing quotes
+   Examples: "I'll take the Elite plan", "Buy it", "I want to purchase", "Checkout", "Get the standard plan"
+
+3. "policy_explanation" - User has questions about coverage, policy terms, or what's included
    Examples: "What does this cover?", "Am I covered for medical?", "Explain the policy"
 
-3. "claims_guidance" - User needs help filing a claim or has claim-related questions
+4. "claims_guidance" - User needs help filing a claim or has claim-related questions
    Examples: "How do I file a claim?", "I need to claim", "My luggage was lost"
 
-4. "human_handoff" - Complex question, complaint, or unclear intent
+5. "human_handoff" - Complex question, complaint, or unclear intent
    Examples: "This is confusing", "Let me speak to someone", unclear messages
 
 Respond with ONLY a valid JSON object:
@@ -115,7 +118,9 @@ Respond with ONLY a valid JSON object:
             Dictionary with intent, confidence, and reasoning
         """
         message_lower = user_message.lower()
-        if any(word in message_lower for word in ["quote", "price", "cost", "insurance", "coverage amount"]):
+        if any(word in message_lower for word in ["buy", "purchase", "checkout", "take it", "i'll take", "get", "proceed", "i want"]):
+            return {"intent": "purchase", "confidence": 0.7, "reasoning": "Keyword fallback - purchase intent"}
+        elif any(word in message_lower for word in ["quote", "price", "cost", "insurance", "coverage amount"]):
             return {"intent": "quote", "confidence": 0.6, "reasoning": "Keyword fallback"}
         elif any(word in message_lower for word in ["cover", "policy", "included", "excluded"]):
             return {"intent": "policy_explanation", "confidence": 0.6, "reasoning": "Keyword fallback"}

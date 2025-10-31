@@ -61,3 +61,6 @@ aiofiles==23.2.1
 
 # Logging
 structlog==23.2.0
+
+# Payment processing
+stripe>=8.0.0
