@@ -252,7 +252,7 @@ LIMIT 10
 
 **apps/backend/.env:**
 ```bash
-CLAIMS_DATABASE_URL=postgresql://hackathon_user:Hackathon2025!@hackathon-db.ceqjfmi6jhdd.ap-southeast-1.rds.amazonaws.com:5432/hackathon_db
+CLAIMS_DATABASE_URL=postgresql://hackathon_user:[PASSWORD]@hackathon-db.ceqjfmi6jhdd.ap-southeast-1.rds.amazonaws.com:5432/hackathon_db
 ENABLE_CLAIMS_INTELLIGENCE=true
 CLAIMS_CACHE_TTL=3600
 ```

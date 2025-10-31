@@ -637,13 +637,13 @@ UK | 383 | 1 | 0 | 0 | $244,507.00
 ### Current Config (Supabase)
 
 ```bash
-DATABASE_URL=postgresql://postgres.zwyibrksagddbrqiqaqf:yuexinthegoat@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require
+DATABASE_URL=postgresql://postgres.zwyibrksagddbrqiqaqf:[PASSWORD]@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require
 ```
 
 ### Needed Config (Claims DB)
 
 ```bash
-CLAIMS_DATABASE_URL=postgresql://hackathon_user:Hackathon2025!@hackathon-db.ceqjfmi6jhdd.ap-southeast-1.rds.amazonaws.com:5432/hackathon_db
+CLAIMS_DATABASE_URL=postgresql://hackathon_user:[PASSWORD]@hackathon-db.ceqjfmi6jhdd.ap-southeast-1.rds.amazonaws.com:5432/hackathon_db
 ```
 
 **Note:** Add to `config.py` as `claims_database_url: Optional[str]`
@@ -772,7 +772,7 @@ Port: 5432
 Database: hackathon_db
 Schema: hackathon
 User: hackathon_user
-Password: Hackathon2025!
+Password: [PASSWORD]
 Table: claims
 ```
 

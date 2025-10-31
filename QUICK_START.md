@@ -1,51 +1,81 @@
-# QUICK START - Fixed for Windows
+# Quick Start - Claims Intelligence Testing
 
-## The Issue
-The cleanup script destroyed all Python files. I've restored them from Git, but now we need to reapply fixes.
+## Fastest Way to Test
 
-## TO START THE SERVER NOW:
+### Option 1: Claims Intelligence Demo Only (30 seconds)
 
-### Option 1: Start with Original Code (Has recursion bug but works for testing)
-
-```powershell
-cd apps\backend
-
-# Kill any Python processes
-taskkill /F /IM python.exe /T 2>nul
-
-# Start server
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```bash
+cd apps/backend
+python demo_claims_intelligence.py
 ```
 
-The server will start but the LangGraph conversation will hit recursion limits.
+This runs the demo without starting servers.
 
-### Option 2: Apply My Fixes (Recommended)
+---
 
-Run this PowerShell command from `apps/backend`:
+### Option 2: Full Stack Testing (5 minutes)
 
-```powershell
-# I'll create the fixed files for you
+**Terminal 1 - Backend:**
+```bash
+cd apps/backend
+python -m uvicorn app.main:app --reload --port 8000
 ```
 
-## What Was Broken
+**Terminal 2 - Frontend:**
+```bash
+cd apps/frontend
+npm run dev
+```
 
-1. **cleanup_and_start.bat** - The Unicode removal script destroyed all Python files
-2. **Git restored OLD versions** - Without my LangGraph fixes
-3. **Missing files**: chat.py, llm_client.py, calculate_step1_quote method
+**Browser:**
+```
+http://localhost:3000/app/quote
+```
 
-## What Works Now
+**Test Message:**
+```
+I need insurance for skiing in Japan with my 8-year-old daughter
+```
 
-- ✅ Server can start (without chat endpoint)
-- ✅ Database issues are handled
-- ❌ Chat endpoint doesn't exist yet
-- ❌ LangGraph has recursion bug
+---
 
-## Next Steps
+## What to Look For
 
-I'll create a proper fix script that:
-1. Adds the missing chat router
-2. Fixes the recursion bug
-3. Adds LLM client
-4. Adds 3-tier pricing
+### In Backend Logs:
 
-**DO NOT run the cleanup_and_start.bat script again - it destroys files!**
+```
+✅ Connected to claims database: 72592 claims available
+🔍 Analyzing claims data for Japan...
+✅ Risk: high, Tier: elite
+```
+
+### In Browser Response:
+
+Look for this section in the bot's quote response:
+
+```
+📊 Risk Analysis:
+Based on analysis of 4,188 historical claims to Japan...
+
+💡 Based on historical data, we recommend the Elite plan
+```
+
+---
+
+## Quick Health Check
+
+```bash
+# Backend health
+curl http://localhost:8000/health
+
+# Claims DB health
+cd apps/backend
+python -c "
+from app.core.claims_db import check_claims_db_health
+print('✅ Claims DB OK' if check_claims_db_health() else '❌ Claims DB DOWN')
+"
+```
+
+---
+
+**That's it! The claims intelligence automatically appears in quotes.** 🎉
