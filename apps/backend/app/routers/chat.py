@@ -76,28 +76,20 @@ async def send_message(
     - Session persistence via PostgreSQL checkpointing
     """
     
-    # Validate session_id format
+    # Validate session_id
     try:
         uuid.UUID(request.session_id)
     except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid session_id format. Must be a valid UUID."
-        )
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
     
-    # Get conversation graph (cached singleton)
+    # Get graph
     try:
         graph = get_conversation_graph(db)
     except Exception as e:
-        error_str = str(e).lower()
-        if "relation" in error_str or "table" in error_str:
-            raise HTTPException(
-                status_code=503,
-                detail="Chat service is initializing. Please try again."
-            )
+        print(f"❌ Graph initialization failed: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to initialize conversation: {str(e)}"
+            status_code=503,
+            detail="Chat service is temporarily unavailable. Please try again."
         )
     
     # Invoke LangGraph with real conversation intelligence
@@ -136,40 +128,55 @@ async def send_message(
         # Invoke graph with messages - graph will handle merging with checkpoint state
         result = graph.invoke(current_state, config)
         
-        print(f"✅ LangGraph execution complete")
-        print(f"   State keys: {list(result.keys())}")
+        print(f"✅ Graph execution complete")
         
+    except RecursionError as e:
+        print(f"❌ Recursion limit hit: {e}")
+        # Return graceful error to user
+        return ChatMessageResponse(
+            session_id=request.session_id,
+            message="I apologize, but I'm having trouble processing that. Could you rephrase your question?",
+            state={},
+            quote=None,
+            requires_human=True
+        )
+    
     except Exception as e:
-        print(f"❌ LangGraph invocation error:")
+        print(f"❌ Graph execution error: {e}")
         import traceback
         traceback.print_exc()
         
-        raise HTTPException(
-            status_code=500,
-            detail="I encountered an error processing your message. Please try again or start a new session."
+        # Try to return a helpful error message
+        error_message = "I encountered an issue processing your message. "
+        
+        if "LLM" in str(e) or "Groq" in str(e):
+            error_message += "Our AI service is experiencing issues. Please try again."
+        elif "database" in str(e).lower():
+            error_message += "We're having database connectivity issues. Please try again."
+        else:
+            error_message += "Please try rephrasing or contact support."
+        
+        return ChatMessageResponse(
+            session_id=request.session_id,
+            message=error_message,
+            state={},
+            quote=None,
+            requires_human=True
         )
     
-    # Extract agent's response safely
-    agent_response = "I'm processing your request. Please try again."
+    # Extract agent response (existing code continues...)
+    agent_response = "I'm processing your request..."
     messages = result.get("messages", [])
     
     if messages:
-        # Find last AI message (skip user messages)
         for msg in reversed(messages):
             if isinstance(msg, AIMessage):
-                agent_response = msg.content if hasattr(msg, 'content') else str(msg)
-                print(f"   Agent response: '{agent_response[:80]}...'")
+                agent_response = msg.content
                 break
     
-    # Extract quote data if available
+    # Extract quote
     quote_data = result.get("quote_data")
     
-    if quote_data:
-        print(f"💰 Quote generated successfully")
-        print(f"   Destination: {quote_data.get('destination')}")
-        print(f"   Tiers available: {list(quote_data.get('quotes', {}).keys())}")
-    
-    # Build response with comprehensive state
     return ChatMessageResponse(
         session_id=request.session_id,
         message=agent_response,
@@ -180,7 +187,6 @@ async def send_message(
             "preferences": result.get("preferences", {}),
             "awaiting_confirmation": result.get("awaiting_confirmation", False),
             "confirmation_received": result.get("confirmation_received", False),
-            "awaiting_field": result.get("awaiting_field", "")
         },
         quote=quote_data,
         requires_human=result.get("requires_human", False),

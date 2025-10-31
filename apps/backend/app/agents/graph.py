@@ -172,7 +172,7 @@ def create_conversation_graph(db) -> StateGraph:
     def orchestrator(state: ConversationState) -> ConversationState:
         """Route conversation based on LLM intent classification."""
         
-        # Initialize loop protection fields if not present
+        # Initialize loop protection
         if "_loop_count" not in state:
             state["_loop_count"] = 0
         if "_ready_for_pricing" not in state:
@@ -180,35 +180,43 @@ def create_conversation_graph(db) -> StateGraph:
         if "_pricing_complete" not in state:
             state["_pricing_complete"] = False
         
-        try:
-            last_message = state["messages"][-1]
-            user_input = last_message.content.lower()
-            
-            # Simple intent classification without LLM for debugging
-            if any(word in user_input for word in ["insurance", "quote", "travel", "trip"]):
-                state["current_intent"] = "quote"
-                state["confidence_score"] = 0.9
-            elif any(word in user_input for word in ["policy", "coverage", "terms"]):
-                state["current_intent"] = "policy_explanation"
-                state["confidence_score"] = 0.8
-            elif any(word in user_input for word in ["claim", "file", "reimbursement"]):
-                state["current_intent"] = "claims_guidance"
-                state["confidence_score"] = 0.8
-            else:
-                state["current_intent"] = "quote"  # Default to quote
-                state["confidence_score"] = 0.7
-            
-            # Check if human handoff needed (low confidence)
-            if state["confidence_score"] < 0.6:
-                state["requires_human"] = True
-            
-            return state
-        except Exception as e:
-            # On error, default to quote intent
+        state["_loop_count"] += 1
+        print(f"\n{'='*60}")
+        print(f"🔀 ORCHESTRATOR (iteration {state['_loop_count']})")
+        print(f"{'='*60}")
+        
+        messages = state.get("messages", [])
+        if not messages:
             state["current_intent"] = "quote"
-            state["confidence_score"] = 0.5
-            state["requires_human"] = False
             return state
+        
+        last_message = messages[-1]
+        user_message = last_message.content if hasattr(last_message, 'content') else str(last_message)
+        
+        # Get conversation history for context
+        history = []
+        for msg in messages[-5:]:  # Last 5 messages
+            content = msg.content if hasattr(msg, 'content') else str(msg)
+            history.append(content)
+        
+        # Use LLM to classify intent
+        intent_result = llm_client.classify_intent(user_message, history)
+        
+        intent = intent_result["intent"]
+        confidence = intent_result["confidence"]
+        
+        state["current_intent"] = intent
+        state["confidence_score"] = confidence
+        
+        print(f"Intent: {intent} (confidence: {confidence:.2f})")
+        
+        # Check if human handoff needed (low confidence)
+        if confidence < 0.6:
+            state["requires_human"] = True
+        else:
+            state["requires_human"] = False
+        
+        return state
     
     def needs_assessment(state: ConversationState) -> ConversationState:
         """Collect trip information through structured 6-question conversation."""
@@ -743,25 +751,92 @@ Is this information correct? (yes/no)"""
             return state
     
     def policy_explainer(state: ConversationState) -> ConversationState:
-        """Provide policy explanations using RAG."""
+        """
+        Answer policy questions using mock policy knowledge base.
+        """
         
-        last_message = state["messages"][-1]
-        user_input = last_message.content
+        print("\n📚 POLICY EXPLAINER NODE")
         
-        # Search policy documents
-        search_result = tools.search_policy_documents(user_input)
+        messages = state.get("messages", [])
+        last_message = messages[-1]
+        user_question = last_message.content if hasattr(last_message, 'content') else str(last_message)
         
-        if search_result["success"] and search_result["results"]:
-            response_parts = []
-            for result in search_result["results"][:2]:  # Limit to 2 results
-                response_parts.append(f"{result['text']}\nSource: §{result['section_id']}")
-            
-            response = "\n\n".join(response_parts)
+        print(f"   Question: {user_question[:100]}...")
+        
+        # Mock policy knowledge base (replace with real RAG later)
+        policy_kb = {
+            "medical": {
+                "coverage": "Medical coverage includes emergency medical treatment, hospitalization, and medical evacuation up to policy limits.",
+                "limits": "Standard: $50,000 | Elite: $100,000 | Premier: $200,000",
+                "exclusions": "Pre-existing conditions (unless declared), cosmetic procedures, routine checkups"
+            },
+            "cancellation": {
+                "coverage": "Trip cancellation covers non-refundable expenses if you must cancel due to covered reasons.",
+                "reasons": "Serious illness, injury, death of traveler/family, natural disasters, travel warnings",
+                "limits": "Standard: $5,000 | Elite: $10,000 | Premier: $15,000"
+            },
+            "baggage": {
+                "coverage": "Baggage coverage includes loss, theft, or damage to personal belongings.",
+                "limits": "Standard: $3,000 | Elite: $5,000 | Premier: $10,000",
+                "exclusions": "Cash, jewelry over $500, electronics over $1,000 (unless declared)"
+            },
+            "adventure": {
+                "coverage": "Adventure sports coverage available in Elite and Premier plans.",
+                "included": "Skiing, scuba diving (certified), hiking, zip-lining",
+                "excluded": "Base jumping, solo climbing, motor sports",
+                "requirement": "Must select Elite or Premier plan and declare activities"
+            },
+            "pre-existing": {
+                "coverage": "Pre-existing conditions can be covered if declared and accepted.",
+                "process": "Declare conditions during application, underwriting review, additional premium may apply",
+                "exclusions": "Conditions not declared, terminal illnesses, ongoing treatment required"
+            }
+        }
+        
+        # Simple keyword matching to find relevant policy section
+        question_lower = user_question.lower()
+        
+        relevant_sections = []
+        
+        if any(word in question_lower for word in ["medical", "hospital", "doctor", "treatment", "sick", "injured"]):
+            relevant_sections.append(("Medical Coverage", policy_kb["medical"]))
+        
+        if any(word in question_lower for word in ["cancel", "cancellation", "refund", "can't go"]):
+            relevant_sections.append(("Trip Cancellation", policy_kb["cancellation"]))
+        
+        if any(word in question_lower for word in ["bag", "luggage", "lost", "stolen", "damage"]):
+            relevant_sections.append(("Baggage Coverage", policy_kb["baggage"]))
+        
+        if any(word in question_lower for word in ["adventure", "sport", "ski", "dive", "scuba", "hiking"]):
+            relevant_sections.append(("Adventure Sports", policy_kb["adventure"]))
+        
+        if any(word in question_lower for word in ["pre-existing", "condition", "medical history"]):
+            relevant_sections.append(("Pre-existing Conditions", policy_kb["pre-existing"]))
+        
+        # Build response
+        if relevant_sections:
+            response = "Based on our policy:\n\n"
+            for section_name, section_data in relevant_sections:
+                response += f"**{section_name}:**\n"
+                for key, value in section_data.items():
+                    response += f"• {key.title()}: {value}\n"
+                response += "\n"
+            response += "Do you have any other questions about coverage?"
         else:
-            response = "I couldn't find specific information about that in our policy documents. Let me connect you with a human agent for assistance."
-            state["requires_human"] = True
+            response = """I can help explain our travel insurance policy. Here are common topics:
+
+- **Medical Coverage** - Emergency treatment and hospitalization
+- **Trip Cancellation** - Non-refundable expenses if you must cancel
+- **Baggage** - Lost, stolen, or damaged belongings
+- **Adventure Sports** - Coverage for activities (Elite/Premier plans)
+- **Pre-existing Conditions** - How we handle medical history
+
+What would you like to know more about?"""
         
         state["messages"].append(AIMessage(content=response))
+        state["policy_question"] = user_question
+        
+        print(f"   ✅ Answered with {len(relevant_sections)} relevant sections")
         
         return state
     
@@ -832,6 +907,31 @@ Is this information correct? (yes/no)"""
         
         return state
     
+    def log_conversation_metrics(state: ConversationState):
+        """Log metrics for analytics."""
+        
+        messages = state.get("messages", [])
+        intent = state.get("current_intent", "")
+        quote_data = state.get("quote_data")
+        
+        metrics = {
+            "session_id": state.get("session_id", "unknown"),
+            "message_count": len(messages),
+            "intent": intent,
+            "quote_generated": quote_data is not None,
+            "loop_count": state.get("_loop_count", 0),
+            "human_handoff": state.get("requires_human", False)
+        }
+        
+        print(f"\n📊 CONVERSATION METRICS:")
+        for key, value in metrics.items():
+            print(f"   {key}: {value}")
+        
+        # TODO: Send to analytics service (Mixpanel, Segment, etc.)
+        # For now, just log to console
+        
+        return metrics
+    
     def should_continue(state: ConversationState) -> str:
         """Determine next step with loop protection and clear exit conditions."""
         
@@ -855,6 +955,7 @@ Is this information correct? (yes/no)"""
         # Priority 1: If pricing is complete, END
         if state.get("_pricing_complete", False):
             print(f"   → END (pricing complete)")
+            log_conversation_metrics(state)
             return END
 
         # Priority 2: Human handoff
@@ -891,6 +992,7 @@ Is this information correct? (yes/no)"""
             # If pricing already complete, we're done
             if pricing_complete or has_quote:
                 print(f"   → END (quote exists)")
+                log_conversation_metrics(state)
                 return END
             
             # CRITICAL FIX: If we're waiting for user response, check if last message is from user
@@ -913,6 +1015,7 @@ Is this information correct? (yes/no)"""
                     return "pricing"
                 else:
                     print(f"   → END")
+                    log_conversation_metrics(state)
                     return END
             
             # Otherwise, continue collecting info
