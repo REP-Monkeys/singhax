@@ -1,0 +1,58 @@
+{
+  "session_id": "test-session",
+  "document_type": "flight_confirmation",
+  "extracted_at": "2025-10-31T16:03:49.996859Z",
+  "source_filename": "flight.pdf",
+  "airline": {
+    "name": null,
+    "code": "TR",
+    "confidence": 0.92
+  },
+  "flight_details": {
+    "departure": {
+      "date": "2025-03-15",
+      "time": null,
+      "airport_code": "SIN",
+      "airport_name": null,
+      "confidence": 0.85
+    },
+    "return": {
+      "date": null,
+      "time": null,
+      "airport_code": "NRT",
+      "airport_name": null,
+      "confidence": 0.8
+    },
+    "flight_numbers": {
+      "outbound": "TR892",
+      "inbound": null,
+      "confidence": 0.93
+    }
+  },
+  "destination": {
+    "country": null,
+    "city": null,
+    "airport_code": "NRT",
+    "confidence": 0.82
+  },
+  "travelers": [],
+  "trip_value": {
+    "total_cost": null,
+    "breakdown": []
+  },
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [
+    "airline.confidence",
+    "flight_details.flight_numbers.confidence"
+  ],
+  "low_confidence_fields": [
+    "flight_details.departure.confidence",
+    "flight_details.return.confidence",
+    "destination.confidence"
+  ],
+  "missing_fields": []
+}

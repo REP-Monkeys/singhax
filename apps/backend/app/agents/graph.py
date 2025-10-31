@@ -13,6 +13,8 @@ from app.agents.tools import ConversationTools
 from app.agents.llm_client import GroqLLMClient
 from app.services.pricing import PricingService
 from app.services.geo_mapping import GeoMapper
+# JSONExtractor imported lazily inside process_document to avoid circular import
+from app.services.policy_recommender import PolicyRecommender
 from app.core.config import settings
 from app.models.trip import Trip
 
@@ -91,7 +93,7 @@ def get_or_create_checkpointer():
         return None
 
 
-def parse_date_safe(date_string: str) -> Optional[date]:
+def parse_date_safe(date_string: str, prefer_future: bool = True, reference_date: Optional[date] = None) -> Optional[date]:
     """Safely parse date string to date object with flexible format support.
     
     Accepts multiple formats:
@@ -99,38 +101,61 @@ def parse_date_safe(date_string: str) -> Optional[date]:
     - MM/DD/YYYY (12/15/2025)
     - DD/MM/YYYY (15/12/2025)
     - Natural language (December 15, 2025, Dec 15, 2025)
+    - Dates without year (25 jan, Jan 30) - will infer year intelligently
     - Relative dates (tomorrow, next week, in 3 days)
     
     Args:
         date_string: Date in any common format
+        prefer_future: If True, prefer future dates when year is ambiguous
+        reference_date: Reference date for year inference (e.g., departure_date for return_date)
         
     Returns:
         date object if parsing succeeds, None otherwise
     """
     try:
+        if not isinstance(date_string, str):
+            return None
+            
         # First try standard YYYY-MM-DD for efficiency
-        if isinstance(date_string, str) and len(date_string) == 10 and date_string.count('-') == 2:
+        if len(date_string) == 10 and date_string.count('-') == 2:
             try:
-                return datetime.strptime(date_string, "%Y-%m-%d").date()
+                parsed = datetime.strptime(date_string, "%Y-%m-%d").date()
+                # If we have a reference date and parsed date is before it, try next year
+                if reference_date and parsed < reference_date:
+                    # Same month/day, next year
+                    try:
+                        parsed = parsed.replace(year=parsed.year + 1)
+                    except ValueError:  # Feb 29 in non-leap year
+                        parsed = parsed.replace(year=parsed.year + 1, day=28)
+                return parsed
             except:
                 pass
         
         # Use dateparser for flexible parsing
+        base_date = reference_date if reference_date else datetime.now().date()
         settings = {
-            'PREFER_DATES_FROM': 'future',  # Prefer future dates for travel
-            'RELATIVE_BASE': datetime.now(),
+            'PREFER_DATES_FROM': 'future' if prefer_future else 'current_period',  # Prefer future dates for travel
+            'RELATIVE_BASE': datetime.combine(base_date, datetime.min.time()),
             'RETURN_AS_TIMEZONE_AWARE': False,
         }
         
         parsed = dateparser.parse(date_string, settings=settings)
         
         if parsed:
-            return parsed.date()
+            parsed_date = parsed.date()
+            # If we have a reference date and parsed date is before it, try next year
+            if reference_date and parsed_date < reference_date:
+                # Same month/day, next year
+                try:
+                    parsed_date = parsed_date.replace(year=parsed_date.year + 1)
+                except ValueError:  # Feb 29 in non-leap year
+                    parsed_date = parsed_date.replace(year=parsed_date.year + 1, day=28)
+            return parsed_date
         
         return None
         
     except Exception as e:
-        print(f"   ⚠️ Date parsing error: {e}")
+        print(f"   ⚠️ Date parsing error for '{date_string}': {e}")
         return None
 
 
@@ -167,6 +192,11 @@ class ConversationState(TypedDict):
     # Claims intelligence fields
     claims_insights: Optional[Dict[str, Any]]  # Store risk analysis results
     risk_narrative: Optional[str]  # LLM-generated risk narrative
+    # OCR and document processing
+    uploaded_images: List[Dict[str, Any]]  # Metadata about uploaded images/documents
+    ocr_results: List[Dict[str, Any]]  # OCR extraction results
+    document_data: List[Dict[str, Any]]  # Structured JSON data from uploaded documents
+    uploaded_filename: str  # Filename of the most recently uploaded document
 
 
 def create_conversation_graph(db) -> StateGraph:
@@ -321,45 +351,73 @@ def create_conversation_graph(db) -> StateGraph:
                 # Parse to date object with error handling
                 parsed_date = parse_date_safe(extracted["departure_date"])
                 if parsed_date:
-                    trip["departure_date"] = parsed_date
-                    if current_q == "departure_date":
-                        extracted_info = True
+                    # Validate date is in the future
+                    today = date.today()
+                    if parsed_date < today:
+                        print(f"   ⚠️  Parsed departure_date {parsed_date} is in the past, attempting to fix...")
+                        # Try parsing again with better year inference
+                        parsed_date = parse_date_safe(extracted["departure_date"], prefer_future=True)
+                        if parsed_date and parsed_date < today:
+                            print(f"   ⚠️  Still in past after fix: {parsed_date}, skipping")
+                            parsed_date = None
+                    
+                    if parsed_date:
+                        trip["departure_date"] = parsed_date
+                        if current_q == "departure_date":
+                            extracted_info = True
 
-                    # Update trip with start date
-                    if state.get("trip_id"):
-                        try:
-                            existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
-                            if existing_trip:
-                                existing_trip.start_date = parsed_date
-                                db.commit()
-                                print(f"   ✅ Updated trip start_date: {parsed_date}")
-                        except Exception as e:
-                            print(f"   ⚠️  Failed to update trip start_date: {e}")
+                        # Update trip with start date
+                        if state.get("trip_id"):
+                            try:
+                                existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
+                                if existing_trip:
+                                    existing_trip.start_date = parsed_date
+                                    db.commit()
+                                    print(f"   ✅ Updated trip start_date: {parsed_date}")
+                            except Exception as e:
+                                print(f"   ⚠️  Failed to update trip start_date: {e}")
                 else:
                     # Date parsing failed - will ask for clarification below
-                    pass
+                    print(f"   ⚠️  Failed to parse departure_date: {extracted.get('departure_date')}")
             
             if "return_date" in extracted:
                 # Parse to date object with error handling
                 parsed_date = parse_date_safe(extracted["return_date"])
                 if parsed_date:
-                    trip["return_date"] = parsed_date
-                    if current_q == "return_date":
-                        extracted_info = True
+                    # Validate return_date is after departure_date
+                    departure = trip.get("departure_date")
+                    if departure and parsed_date <= departure:
+                        print(f"   ⚠️  Parsed return_date {parsed_date} is not after departure_date {departure}, attempting to fix...")
+                        # If we have a departure date, try to infer correct year for return
+                        if departure:
+                            # Extract month/day from return_date and use departure's year (or next year if needed)
+                            return_str = extracted["return_date"]
+                            # Try to fix by ensuring same year as departure, or next year if that makes it before departure
+                            parsed_date = parse_date_safe(return_str, reference_date=departure)
+                            if parsed_date and parsed_date <= departure:
+                                # If still not after departure, add a year
+                                from datetime import timedelta
+                                parsed_date = departure + timedelta(days=1)  # At least one day after
+                                print(f"   ⚠️  Adjusted return_date to be after departure: {parsed_date}")
+                    
+                    if parsed_date:
+                        trip["return_date"] = parsed_date
+                        if current_q == "return_date":
+                            extracted_info = True
 
-                    # Update trip with end date
-                    if state.get("trip_id"):
-                        try:
-                            existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
-                            if existing_trip:
-                                existing_trip.end_date = parsed_date
-                                db.commit()
-                                print(f"   ✅ Updated trip end_date: {parsed_date}")
-                        except Exception as e:
-                            print(f"   ⚠️  Failed to update trip end_date: {e}")
+                        # Update trip with end date
+                        if state.get("trip_id"):
+                            try:
+                                existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
+                                if existing_trip:
+                                    existing_trip.end_date = parsed_date
+                                    db.commit()
+                                    print(f"   ✅ Updated trip end_date: {parsed_date}")
+                            except Exception as e:
+                                print(f"   ⚠️  Failed to update trip end_date: {e}")
                 else:
                     # Date parsing failed - will ask for clarification below
-                    pass
+                    print(f"   ⚠️  Failed to parse return_date: {extracted.get('return_date')}")
             
             if "travelers_ages" in extracted:
                 # Validate ages are integers in valid range
@@ -495,11 +553,47 @@ def create_conversation_graph(db) -> StateGraph:
                 
                 if said_yes:
                     state["confirmation_received"] = True
-                    state["_ready_for_pricing"] = True  # ADD THIS LINE
+                    state["_ready_for_pricing"] = True
                     state["awaiting_confirmation"] = False
                     state["current_question"] = ""  # Clear the question
                     print(f"   ✅ User confirmed - ready for pricing")
-                    response = "Great! Let me calculate your insurance options..."
+                    
+                    # Generate policy recommendation if we have enough data
+                    try:
+                        policy_recommender = PolicyRecommender()
+                        
+                        # Build extracted data structure for recommendation
+                        extracted_data = {
+                            "travelers": [
+                                {
+                                    "age": age,
+                                    "pre_existing_conditions": {"has_conditions": False}  # Would need to ask separately
+                                }
+                                for age in state.get("travelers_data", {}).get("ages", [])
+                            ],
+                            "trip_details": {
+                                "destination": {"country": state.get("trip_details", {}).get("destination")},
+                                "trip_type": {"value": "single_return"},  # Default assumption
+                                "duration_days": {"value": None}  # Would calculate from dates
+                            },
+                            "activities": {
+                                "adventure_sports": {"value": state.get("preferences", {}).get("adventure_sports", False)}
+                            },
+                            "airline_info": {"is_scoot": False}  # Would detect from document
+                        }
+                        
+                        recommendation = policy_recommender.recommend_policy(extracted_data)
+                        
+                        response = "Great! Based on your trip details, I recommend:\n\n"
+                        response += f"**{recommendation.get('recommended_policy', 'Travel Insurance')}** "
+                        response += f"({recommendation.get('recommended_tier', 'Standard')} tier)\n\n"
+                        response += f"{recommendation.get('reasoning', '')}\n\n"
+                        response += "Let me calculate your insurance options..."
+                        
+                    except Exception as e:
+                        print(f"   ⚠️  Policy recommendation failed: {e}")
+                        response = "Great! Let me calculate your insurance options..."
+                    
                     state["messages"].append(AIMessage(content=response))
                     return state
                 elif said_no:
@@ -536,6 +630,7 @@ def create_conversation_graph(db) -> StateGraph:
             # Generate appropriate response based on conversation state
             print(f"   🔍 Debug: missing={missing}, adventure_sports={prefs.get('adventure_sports')}, all_present={all_required_present}")
             print(f"   🔍 Conditions: awaiting_confirmation={state.get('awaiting_confirmation')}, adventure_is_none={prefs.get('adventure_sports') is None}")
+            print(f"   🔍 Current question: {state.get('current_question')}")
             
             # Priority: If we just answered adventure question and all required info is present, go to confirmation
             # (This prevents asking for destination again after successfully answering adventure)
@@ -726,7 +821,30 @@ Is this information correct? (yes/no)"""
             
             # Store full quote result
             state["quote_data"] = quote_result
-            
+
+            # Update trip in database with total_cost (price range)
+            if state.get("trip_id"):
+                try:
+                    existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
+                    if existing_trip:
+                        quotes = quote_result["quotes"]
+                        prices = []
+                        if "standard" in quotes:
+                            prices.append(quotes["standard"]["price"])
+                        if "elite" in quotes:
+                            prices.append(quotes["elite"]["price"])
+                        if "premier" in quotes:
+                            prices.append(quotes["premier"]["price"])
+
+                        if prices:
+                            min_price = min(prices)
+                            max_price = max(prices)
+                            existing_trip.total_cost = f"SGD {min_price:.2f} - SGD {max_price:.2f}"
+                            db.commit()
+                            print(f"   ✅ Updated trip total_cost: {existing_trip.total_cost}")
+                except Exception as e:
+                    print(f"   ⚠️  Failed to update trip total_cost: {e}")
+
             # Format a beautiful response with all tiers
             quotes = quote_result["quotes"]
             dest_name = destination.title()
@@ -1063,37 +1181,315 @@ What would you like to know more about?"""
         
         return state
     
+    def process_document(state: ConversationState) -> ConversationState:
+        """Process uploaded document using structured JSON data (OCR happens behind the scenes)."""
+        
+        print("\n📄 DOCUMENT PROCESSING NODE")
+        
+        messages = state.get("messages", [])
+        if not messages:
+            return state
+        
+        last_message = messages[-1]
+        message_content = last_message.content if hasattr(last_message, 'content') else str(last_message)
+        
+        # Check if this is a document upload message
+        if "[User uploaded a document" not in message_content:
+            # Not a document upload, skip processing
+            return state
+        
+        print(f"   Processing document upload...")
+        
+        # Get structured JSON from state (already extracted by OCR service)
+        document_data = state.get("document_data", [])
+        if not document_data:
+            response = "I received your document, but couldn't process it. Please try uploading again."
+            state["messages"].append(AIMessage(content=response))
+            return state
+        
+        # Get the most recent document
+        latest_doc = document_data[-1]
+        extracted_json = latest_doc.get("extracted_json", {})
+        document_type = extracted_json.get("document_type", "unknown")
+        
+        # Debug: Print extracted JSON structure (first level keys only)
+        print(f"   📋 Extracted JSON keys: {list(extracted_json.keys()) if extracted_json else 'EMPTY'}")
+        if extracted_json:
+            print(f"   📋 Sample values:")
+            for key in list(extracted_json.keys())[:5]:  # Show first 5 keys
+                value = extracted_json.get(key)
+                if isinstance(value, dict):
+                    print(f"      {key}: {{...}} (dict with keys: {list(value.keys())[:3] if value else 'empty'})")
+                elif isinstance(value, list):
+                    print(f"      {key}: [...] (list with {len(value)} items)")
+                else:
+                    print(f"      {key}: {str(value)[:50]}")
+        
+        if document_type == "unknown":
+            response = "I received your document, but couldn't determine its type. Could you please describe what information you'd like me to extract?"
+            state["messages"].append(AIMessage(content=response))
+            return state
+        
+        print(f"   ✅ Processing structured JSON: {document_type}")
+        
+        try:
+            # Initialize policy recommender
+            policy_recommender = PolicyRecommender()
+            
+            # Update state with extracted information based on document type
+            trip = state.get("trip_details", {})
+            travelers = state.get("travelers_data", {})
+            prefs = state.get("preferences", {})
+            
+            extracted_items = []
+            doc_type = extracted_json.get("document_type", "unknown")
+            
+            # Extract based on document type - use structured JSON first
+            if doc_type == "flight_confirmation":
+                # Handle None values from JSON (null in JSON becomes None in Python)
+                flight_details = extracted_json.get("flight_details") or {}
+                destination_info = extracted_json.get("destination") or {}
+                
+                if destination_info and destination_info.get("country"):
+                    trip["destination"] = destination_info["country"]
+                    extracted_items.append(f"destination: {destination_info['country']}")
+                
+                if flight_details:
+                    departure = flight_details.get("departure") or {}
+                    if departure and departure.get("date"):
+                        parsed_date = parse_date_safe(departure["date"])
+                        if parsed_date:
+                            trip["departure_date"] = parsed_date
+                            extracted_items.append(f"departure date: {parsed_date}")
+                    
+                    return_flight = flight_details.get("return") or {}
+                    if return_flight and return_flight.get("date"):
+                        parsed_date = parse_date_safe(return_flight["date"])
+                        if parsed_date:
+                            trip["return_date"] = parsed_date
+                            extracted_items.append(f"return date: {parsed_date}")
+                
+                flight_travelers = extracted_json.get("travelers", [])
+                if flight_travelers:
+                    travelers["count"] = len(flight_travelers)
+                    extracted_items.append(f"travelers: {len(flight_travelers)} person(s)")
+            
+            elif doc_type == "hotel_booking":
+                # Handle None values from JSON
+                location = extracted_json.get("location") or {}
+                booking_dates = extracted_json.get("booking_dates") or {}
+                
+                if location:
+                    address = location.get("address") or {}
+                    if address and address.get("country"):
+                        country = address["country"]
+                        if not trip.get("destination"):
+                            trip["destination"] = country
+                            extracted_items.append(f"destination: {country}")
+                
+                if booking_dates:
+                    check_in = booking_dates.get("check_in") or {}
+                    if check_in and check_in.get("date"):
+                        parsed_date = parse_date_safe(check_in["date"])
+                        if parsed_date and not trip.get("departure_date"):
+                            trip["departure_date"] = parsed_date
+                            extracted_items.append(f"check-in date: {parsed_date}")
+                    
+                    check_out = booking_dates.get("check_out") or {}
+                    if check_out and check_out.get("date"):
+                        parsed_date = parse_date_safe(check_out["date"])
+                        if parsed_date and not trip.get("return_date"):
+                            trip["return_date"] = parsed_date
+                            extracted_items.append(f"check-out date: {parsed_date}")
+            
+            elif doc_type == "itinerary":
+                # Handle None values from JSON
+                trip_overview = extracted_json.get("trip_overview") or {}
+                destinations = extracted_json.get("destinations") or []
+                adventure_sports = extracted_json.get("adventure_sports_detected") or {}
+                
+                if destinations:
+                    first_dest = destinations[0]
+                    if first_dest.get("country") and not trip.get("destination"):
+                        trip["destination"] = first_dest["country"]
+                        extracted_items.append(f"destination: {first_dest['country']}")
+                
+                if trip_overview.get("start_date"):
+                    parsed_date = parse_date_safe(trip_overview["start_date"])
+                    if parsed_date and not trip.get("departure_date"):
+                        trip["departure_date"] = parsed_date
+                        extracted_items.append(f"start date: {parsed_date}")
+                
+                if trip_overview.get("end_date"):
+                    parsed_date = parse_date_safe(trip_overview["end_date"])
+                    if parsed_date and not trip.get("return_date"):
+                        trip["return_date"] = parsed_date
+                        extracted_items.append(f"end date: {parsed_date}")
+                
+                if adventure_sports.get("has_adventure_sports"):
+                    prefs["adventure_sports"] = True
+                    extracted_items.append("adventure sports: Yes")
+            
+            elif doc_type == "visa_application":
+                # Handle None values from JSON
+                visa_details = extracted_json.get("visa_details") or {}
+                planned_trip = extracted_json.get("planned_trip") or {}
+                applicant = extracted_json.get("applicant") or {}
+                
+                if visa_details.get("destination_country") and not trip.get("destination"):
+                    trip["destination"] = visa_details["destination_country"]
+                    extracted_items.append(f"destination: {visa_details['destination_country']}")
+                
+                if planned_trip.get("intended_arrival_date"):
+                    parsed_date = parse_date_safe(planned_trip["intended_arrival_date"])
+                    if parsed_date and not trip.get("departure_date"):
+                        trip["departure_date"] = parsed_date
+                        extracted_items.append(f"intended arrival date: {parsed_date}")
+                
+                if planned_trip.get("intended_departure_date"):
+                    parsed_date = parse_date_safe(planned_trip["intended_departure_date"])
+                    if parsed_date and not trip.get("return_date"):
+                        trip["return_date"] = parsed_date
+                        extracted_items.append(f"intended departure date: {parsed_date}")
+                
+                if applicant.get("age") and not travelers.get("ages"):
+                    age = applicant["age"]
+                    if isinstance(age, int) and 0.08 <= age <= 110:
+                        travelers["ages"] = [age]
+                        travelers["count"] = 1
+                        extracted_items.append(f"traveler age: {age}")
+            
+            # Note: We're using structured JSON from OCR service, so no need for LLM fallback
+            # The JSON extractor already handles all document types with high accuracy
+            
+            state["trip_details"] = trip
+            state["travelers_data"] = travelers
+            state["preferences"] = prefs
+            
+            # Store extracted JSON in state for reference
+            if "ocr_results" not in state:
+                state["ocr_results"] = []
+            state["ocr_results"].append(extracted_json)
+            
+            # Build confirmation response
+            if extracted_items:
+                response = f"Great! I've extracted the following information from your {doc_type.replace('_', ' ')}:\n\n"
+                response += "\n".join([f"• {item}" for item in extracted_items])
+                
+                # Add confidence information if available
+                high_conf_fields = extracted_json.get("high_confidence_fields", [])
+                low_conf_fields = extracted_json.get("low_confidence_fields", [])
+                if high_conf_fields or low_conf_fields:
+                    response += f"\n\n**Confidence levels:**"
+                    if high_conf_fields:
+                        response += f"\n• High confidence ({len(high_conf_fields)} fields): Ready to use"
+                    if low_conf_fields:
+                        response += f"\n• Medium confidence ({len(low_conf_fields)} fields): Please verify"
+                
+                response += "\n\n**Please confirm if these details are correct.** If everything looks good, I'll recommend the best insurance plan for your trip!"
+                
+                # Set awaiting confirmation flag
+                state["awaiting_confirmation"] = True
+                state["confirmation_type"] = "document_extraction"
+            else:
+                response = "I've processed your document. Could you clarify what specific information you'd like me to extract? For example, travel dates, destination, or traveler details?"
+            
+            state["messages"].append(AIMessage(content=response))
+            
+            # Update intent to quote after processing document (to prevent routing back to process_document)
+            state["current_intent"] = "quote"
+            
+            # If we have enough info, mark as ready for pricing (but wait for confirmation)
+            if trip.get("destination") and trip.get("departure_date") and trip.get("return_date") and travelers.get("ages"):
+                print(f"   ✅ Document contains all required info - awaiting confirmation before pricing")
+            
+        except Exception as e:
+            print(f"   ⚠️  Error extracting info from document: {e}")
+            import traceback
+            traceback.print_exc()
+            response = "I had trouble extracting information from your document. Could you please provide the details manually, or try uploading a clearer image?"
+            state["messages"].append(AIMessage(content=response))
+            # Ensure state is properly initialized before returning
+            if "trip_details" not in state:
+                state["trip_details"] = {}
+            if "travelers_data" not in state:
+                state["travelers_data"] = {}
+            if "preferences" not in state:
+                state["preferences"] = {}
+            # Update intent to quote to prevent routing back to process_document
+            state["current_intent"] = "quote"
+        
+        # Always return state to prevent routing errors
+        return state
+    
     def claims_guidance(state: ConversationState) -> ConversationState:
         """Provide claims guidance."""
         
         last_message = state["messages"][-1]
         user_input = last_message.content.lower()
         
-        # Extract claim type
-        claim_type = None
-        if "delay" in user_input:
-            claim_type = "trip_delay"
-        elif "medical" in user_input:
-            claim_type = "medical"
-        elif "baggage" in user_input:
-            claim_type = "baggage"
-        elif "theft" in user_input:
-            claim_type = "theft"
-        elif "cancellation" in user_input:
-            claim_type = "cancellation"
-        
-        if claim_type:
-            requirements = tools.get_claim_requirements(claim_type)
+        # Check if this is a document upload for claims
+        if "[User uploaded a document" in str(last_message.content) or "Extracted text:" in str(last_message.content):
+            # Extract OCR text
+            message_content = last_message.content if hasattr(last_message, 'content') else str(last_message)
+            ocr_text = ""
+            if "Extracted text:" in message_content:
+                parts = message_content.split("Extracted text:", 1)
+                if len(parts) > 1:
+                    ocr_text = parts[1].strip()
             
-            if requirements["success"]:
-                req_docs = requirements["requirements"].get("required_documents", [])
-                req_info = requirements["requirements"].get("required_info", [])
+            # Try to identify claim document type from OCR text
+            ocr_lower = ocr_text.lower()
+            claim_type = None
+            
+            if any(word in ocr_lower for word in ["receipt", "invoice", "bill", "payment", "cost"]):
+                claim_type = "medical"  # Likely medical receipt
+            elif any(word in ocr_lower for word in ["delay", "late", "delayed"]):
+                claim_type = "trip_delay"
+            elif any(word in ocr_lower for word in ["lost", "stolen", "baggage", "luggage"]):
+                claim_type = "baggage"
+            
+            if claim_type:
+                requirements = tools.get_claim_requirements(claim_type)
+                if requirements["success"]:
+                    req_docs = requirements["requirements"].get("required_documents", [])
+                    req_info = requirements["requirements"].get("required_info", [])
+                    
+                    response = f"I see you've uploaded a document related to a {claim_type} claim.\n\n"
+                    response += f"For {claim_type} claims, you'll need:\n\n"
+                    response += f"**Documents:** {', '.join(req_docs)}\n\n"
+                    response += f"**Information:** {', '.join(req_info)}\n\n"
+                    response += "I've extracted the text from your document. Would you like help filling out the claim form?"
+                else:
+                    response = "I've received your document. What type of claim are you looking to file?"
+            else:
+                response = "I've received your document. What type of claim are you looking to file?"
+        else:
+            # Regular claims guidance (no document)
+            claim_type = None
+            if "delay" in user_input:
+                claim_type = "trip_delay"
+            elif "medical" in user_input:
+                claim_type = "medical"
+            elif "baggage" in user_input:
+                claim_type = "baggage"
+            elif "theft" in user_input:
+                claim_type = "theft"
+            elif "cancellation" in user_input:
+                claim_type = "cancellation"
+            
+            if claim_type:
+                requirements = tools.get_claim_requirements(claim_type)
                 
-                response = f"For {claim_type} claims, you'll need:\n\nDocuments: {', '.join(req_docs)}\n\nInformation: {', '.join(req_info)}"
+                if requirements["success"]:
+                    req_docs = requirements["requirements"].get("required_documents", [])
+                    req_info = requirements["requirements"].get("required_info", [])
+                    
+                    response = f"For {claim_type} claims, you'll need:\n\nDocuments: {', '.join(req_docs)}\n\nInformation: {', '.join(req_info)}"
+                else:
+                    response = "I can help you with claims guidance. What type of claim are you looking to file?"
             else:
                 response = "I can help you with claims guidance. What type of claim are you looking to file?"
-        else:
-            response = "I can help you with claims guidance. What type of claim are you looking to file?"
         
         state["messages"].append(AIMessage(content=response))
         
@@ -1111,8 +1507,14 @@ What would you like to know more about?"""
     def customer_service(state: ConversationState) -> ConversationState:
         """Handle customer service requests and escalation."""
         
-        if state.get("requires_human"):
-            # Create handoff request
+        # Check if we're in an active quote flow - if so, don't trigger handoff
+        confirmation_received = state.get("confirmation_received", False)
+        ready_for_pricing = state.get("_ready_for_pricing", False)
+        has_destination = bool(state.get("trip_details", {}).get("destination"))
+        in_active_quote_flow = confirmation_received or ready_for_pricing or has_destination
+        
+        if state.get("requires_human") and not in_active_quote_flow:
+            # Create handoff request only if NOT in active quote flow
             handoff_result = tools.create_handoff_request(
                 state["user_id"],
                 "conversation_escalation",
@@ -1123,6 +1525,9 @@ What would you like to know more about?"""
                 response = "I'm connecting you with a human agent who can better assist you. They'll be with you shortly."
             else:
                 response = "I'm having trouble connecting you with a human agent. Please try again or contact us directly."
+        elif in_active_quote_flow:
+            # If we're in quote flow but ended up here, redirect back to quote flow
+            response = "Let me continue helping you with your travel insurance quote. What would you like to know?"
         else:
             response = "How else can I help you today?"
         
@@ -1215,17 +1620,36 @@ What would you like to know more about?"""
         
         # Priority 5: Non-quote intents
         if intent == "policy_explanation":
+        # Priority 2: Check if we're in an active quote flow first
+        # If user has confirmed and we're ready for pricing, prioritize quote flow over handoff
+        confirmation_received = state.get("confirmation_received", False)
+        ready_for_pricing = state.get("_ready_for_pricing", False)
+        in_active_quote_flow = confirmation_received or ready_for_pricing or state.get("trip_details", {}).get("destination")
+        
+        # Priority 3: Human handoff (but NOT if we're in active quote flow)
+        if state.get("requires_human") and not in_active_quote_flow:
+            print(f"   → customer_service (requires_human, not in quote flow)")
+            return "customer_service"
+        
+        # Priority 4: Non-quote intents
+        intent = state.get("current_intent", "")
+        if intent == "document_upload":
+            print(f"   → process_document")
+            return "process_document"
+        elif intent == "policy_explanation":
             print(f"   → policy_explainer")
             return "policy_explainer"
         elif intent == "claims_guidance":
             print(f"   → claims_guidance")
             return "claims_guidance"
-        elif intent == "human_handoff":
-            print(f"   → customer_service")
+        elif intent == "human_handoff" and not in_active_quote_flow:
+            # Only route to human handoff if NOT in active quote flow
+            print(f"   → customer_service (human_handoff intent, not in quote flow)")
             return "customer_service"
         
-        # Priority 6: Quote flow with clear progression
-        if intent == "quote" or intent == "":
+        # Priority 5: Quote flow with clear progression
+        if intent == "quote" or intent == "" or in_active_quote_flow:
+            # Re-get these values (already checked above but being explicit)
             confirmation_received = state.get("confirmation_received", False)
             ready_for_pricing = state.get("_ready_for_pricing", False)
             pricing_complete = state.get("_pricing_complete", False)
@@ -1284,6 +1708,7 @@ What would you like to know more about?"""
     graph.add_node("risk_assessment", risk_assessment)
     graph.add_node("pricing", pricing)
     graph.add_node("payment_processor", payment_processor)
+    graph.add_node("process_document", process_document)
     graph.add_node("policy_explainer", policy_explainer)
     graph.add_node("claims_guidance", claims_guidance)
     graph.add_node("compliance", compliance)
@@ -1298,7 +1723,22 @@ What would you like to know more about?"""
             "risk_assessment": "risk_assessment",
             "pricing": "pricing",
             "payment_processor": "payment_processor",
+            "process_document": "process_document",
             "policy_explainer": "policy_explainer",
+            "claims_guidance": "claims_guidance",
+            "customer_service": "customer_service",
+            END: END
+        }
+    )
+    
+    # Add conditional edges from process_document (can proceed to quote flow or other intents)
+    graph.add_conditional_edges(
+        "process_document",
+        should_continue,
+        {
+            "needs_assessment": "needs_assessment",
+            "risk_assessment": "risk_assessment",
+            "pricing": "pricing",
             "claims_guidance": "claims_guidance",
             "customer_service": "customer_service",
             END: END
