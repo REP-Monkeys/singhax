@@ -15,6 +15,7 @@ from app.agents.tools import ConversationTools
 from app.agents.llm_client import GroqLLMClient
 from app.services.pricing import PricingService
 from app.services.geo_mapping import GeoMapper
+from app.services.question_generator import QuestionGenerator
 # JSONExtractor imported lazily inside process_document to avoid circular import
 from app.services.policy_recommender import PolicyRecommender
 from app.core.config import settings
@@ -26,100 +27,10 @@ _checkpointer_singleton = None
 _checkpointer_lock = False
 
 
-def clean_markdown(text: str) -> str:
-    """
-    Remove markdown formatting and make text more conversational.
-    Removes bold, italics, headers, bullet points, etc.
-    """
-    # Remove bold (**text** or __text__)
-    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
-    text = re.sub(r'__(.+?)__', r'\1', text)
-    
-    # Remove italics (*text* or _text_)
-    text = re.sub(r'\*(.+?)\*', r'\1', text)
-    text = re.sub(r'_(.+?)_', r'\1', text)
-    
-    # Remove headers (### Header)
-    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
-    
-    # Convert bullet points to numbered sentences or natural flow
-    # Replace markdown bullets with nothing or natural separators
-    text = re.sub(r'^\s*[\*\-\+]\s+', '', text, flags=re.MULTILINE)
-    
-    # Remove horizontal rules
-    text = re.sub(r'^[\-\*\_]{3,}$', '', text, flags=re.MULTILINE)
-    
-    # Clean up code blocks
-    text = re.sub(r'```[\s\S]*?```', '', text)
-    text = re.sub(r'`(.+?)`', r'\1', text)
-    
-    # Replace multiple newlines with double newline max
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    
-    return text.strip()
-
-
-def split_into_messages(text: str, max_length: int = 280) -> List[str]:
-    """
-    Split long text into shorter, digestible messages.
-    Splits on sentence boundaries to maintain readability.
-    """
-    # Clean markdown first
-    text = clean_markdown(text)
-    
-    # If text is short enough, return as-is
-    if len(text) <= max_length:
-        return [text]
-    
-    messages = []
-    current_message = ""
-    
-    # Split by sentences (rough approximation)
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    
-    for sentence in sentences:
-        # If adding this sentence would exceed max_length
-        if len(current_message) + len(sentence) > max_length and current_message:
-            messages.append(current_message.strip())
-            current_message = sentence + " "
-        else:
-            current_message += sentence + " "
-    
-    # Add any remaining text
-    if current_message.strip():
-        messages.append(current_message.strip())
-    
-    return messages
-
-
-class PersistentCheckpointer:
-    """Wrapper around PostgresSaver to handle context manager properly."""
-    
-    def __init__(self, conn_string):
-        self.conn_string = conn_string
-        self._checkpointer_context = None
-        self._checkpointer = None
-    
-    def __getattr__(self, name):
-        """Delegate all method calls to the actual checkpointer."""
-        if self._checkpointer is None:
-            # Lazy initialization - create checkpointer when first accessed
-            from langgraph.checkpoint.postgres import PostgresSaver
-            self._checkpointer_context = PostgresSaver.from_conn_string(self.conn_string)
-            self._checkpointer = self._checkpointer_context.__enter__()
-        return getattr(self._checkpointer, name)
-    
-    def __enter__(self):
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._checkpointer_context:
-            self._checkpointer_context.__exit__(exc_type, exc_val, exc_tb)
-
 def get_or_create_checkpointer():
     """
-    Create or retrieve PostgreSQL checkpointer for conversation state persistence.
-    Uses Supabase PostgreSQL connection for checkpointing.
+    Create PostgreSQL checkpointer with proper connection pool management.
+    Uses psycopg_pool for persistent connections.
     """
     global _checkpointer_singleton
 
@@ -128,30 +39,45 @@ def get_or_create_checkpointer():
 
     try:
         from langgraph.checkpoint.postgres import PostgresSaver
+        from psycopg_pool import ConnectionPool
 
         # Use the database URL from settings
         conn_string = settings.database_url
 
         # For Supabase pooler, convert from transaction pooler (6543) to session pooler (5432)
-        # Session pooler supports prepared statements which LangGraph needs
         if 'pooler.supabase.com:6543' in conn_string:
             conn_string = conn_string.replace(':6543/', ':5432/')
-            print(f"📦 Initializing PostgreSQL checkpointer (using session pooler)...")
+            print(f"📦 Initializing PostgreSQL checkpointer with connection pool...")
         else:
-            print(f"📦 Initializing PostgreSQL checkpointer...")
+            print(f"📦 Initializing PostgreSQL checkpointer with connection pool...")
 
         print(f"   Connection: {conn_string.split('@')[1].split('?')[0] if '@' in conn_string else 'local'}")
 
-        # Create checkpointer and setup tables
-        with PostgresSaver.from_conn_string(conn_string) as checkpointer:
-            # Setup creates the checkpoint tables if they don't exist
-            checkpointer.setup()
-            print("   ✓ Checkpoint tables verified/created")
+        # Create a persistent connection pool (min 1, max 10 connections)
+        # This pool will stay alive for the app lifetime
+        pool = ConnectionPool(
+            conninfo=conn_string,
+            min_size=1,
+            max_size=10,
+            timeout=30,
+            max_lifetime=3600,  # Recycle connections after 1 hour
+            max_idle=600,       # Close idle connections after 10 minutes
+        )
 
-        # Now create the persistent wrapper
-        _checkpointer_singleton = PersistentCheckpointer(conn_string)
+        print(f"   ✓ Connection pool created (min=1, max=10)")
 
-        print("✅ PostgreSQL checkpointing enabled (Phase 2)")
+        # Use the pool's connection to setup tables
+        with pool.connection() as conn:
+            # Create a temporary PostgresSaver just for setup
+            temp_saver = PostgresSaver(conn)
+            temp_saver.setup()
+            print(f"   ✓ Checkpoint tables verified/created")
+
+        # Store the checkpointer with the pool directly
+        # PostgresSaver accepts a ConnectionPool object
+        _checkpointer_singleton = PostgresSaver(pool)
+
+        print("✅ PostgreSQL checkpointing enabled with connection pool")
         return _checkpointer_singleton
 
     except Exception as e:
@@ -274,6 +200,7 @@ def create_conversation_graph(db) -> StateGraph:
     llm_client = GroqLLMClient()
     tools = ConversationTools(db, llm_client)
     pricing_service = PricingService()
+    question_generator = QuestionGenerator()
     
     def orchestrator(state: ConversationState) -> ConversationState:
         """Route conversation based on LLM intent classification."""
@@ -554,6 +481,14 @@ def create_conversation_graph(db) -> StateGraph:
                 print(f"   ✅ Extracted destination: {extracted['destination']}")
                 if current_q == "destination":
                     extracted_info = True
+                
+                # Automatically derive arrival_country from destination
+                try:
+                    arrival_country_iso = GeoMapper.get_country_iso_code(extracted["destination"])
+                    trip["arrival_country"] = arrival_country_iso
+                    print(f"   ✅ Auto-derived arrival_country: {arrival_country_iso}")
+                except (ValueError, AttributeError) as e:
+                    print(f"   ⚠️  Could not auto-derive arrival_country from '{extracted['destination']}': {e}")
 
                 # Create trip in database after destination is provided (if not already created)
                 if not state.get("trip_id") and state.get("user_id") and state.get("session_id"):
@@ -686,6 +621,17 @@ def create_conversation_graph(db) -> StateGraph:
                     travelers["count"] = len(valid_ages)
                     if current_q == "travelers":
                         extracted_info = True
+                    
+                    # Automatically calculate adults_count and children_count
+                    adults_count = sum(1 for age in valid_ages if age >= 18)
+                    children_count = sum(1 for age in valid_ages if age < 18)
+                    # Ensure at least 1 adult (Ancileo API requirement)
+                    if adults_count == 0 and children_count > 0:
+                        adults_count = 1
+                        children_count = max(0, children_count - 1)
+                    trip["adults_count"] = adults_count
+                    trip["children_count"] = children_count
+                    print(f"   ✅ Auto-calculated adults: {adults_count}, children: {children_count}")
 
                     # Update trip with travelers count
                     if state.get("trip_id"):
@@ -708,6 +654,11 @@ def create_conversation_graph(db) -> StateGraph:
                     if not travelers.get("ages"):
                         travelers["ages"] = [30] * count  # Default adult age
                     print(f"   ✅ Set travelers count from document: {count} (using default adult ages)")
+                    
+                    # Automatically set adults_count (assume all adults if no ages specified)
+                    trip["adults_count"] = count
+                    trip["children_count"] = 0
+                    print(f"   ✅ Auto-set adults_count: {count} (all assumed adults)")
 
                     # Update trip with travelers count
                     if state.get("trip_id"):
@@ -833,7 +784,19 @@ def create_conversation_graph(db) -> StateGraph:
             print(f"   🔍 Missing info check: {not any([trip.get('destination'), trip.get('departure_date'), trip.get('return_date'), travelers.get('ages')])}")
             if not any([trip.get("destination"), trip.get("departure_date"), trip.get("return_date"), travelers.get("ages")]):
                 # This is an initial greeting - ask for destination first
-                response = "I'd be happy to help you with travel insurance! Where are you planning to travel?"
+                collected = {
+                    "destination": trip.get("destination"),
+                    "departure_date": trip.get("departure_date"),
+                    "return_date": trip.get("return_date"),
+                    "travelers": travelers.get("ages")
+                }
+                response = question_generator.generate_question(
+                    field="destination",
+                    collected_info=collected,
+                    conversation_history=state["messages"],
+                    llm_client=llm_client,
+                    use_llm=settings.use_llm_questions
+                )
                 state["current_question"] = "destination"  # CRITICAL: Set question to prevent loop
                 print(f"   💬 Asking: {response}")
                 state["messages"].append(AIMessage(content=response))
@@ -971,7 +934,19 @@ def create_conversation_graph(db) -> StateGraph:
                             print(f"   🔍 All required fields present, but adventure_sports not answered yet")
                             state["awaiting_confirmation"] = False
                             state["current_question"] = "adventure_sports"
-                            response = "Thank you for confirming! One more question: Are you planning any adventure activities like skiing, scuba diving, trekking, or bungee jumping?"
+                            collected = {
+                                "destination": trip.get("destination"),
+                                "departure_date": trip.get("departure_date"),
+                                "return_date": trip.get("return_date"),
+                                "travelers": travelers.get("ages")
+                            }
+                            response = question_generator.generate_question(
+                                field="adventure_sports",
+                                collected_info=collected,
+                                conversation_history=state["messages"],
+                                llm_client=llm_client,
+                                use_llm=settings.use_llm_questions
+                            )
                             state["messages"].append(AIMessage(content=response))
                             return state
                         else:
@@ -1096,28 +1071,52 @@ def create_conversation_graph(db) -> StateGraph:
                     acknowledgment = "Thank you for confirming! I just need a few more details to get you the best quote.\n\n"
                     state["_just_confirmed"] = False  # Clear the flag
 
-                # Ask for next missing piece of information
+                # Ask for next missing piece of information using LLM-generated questions
+                # Build collected info dict for context-aware question generation
+                collected = {
+                    "destination": trip.get("destination"),
+                    "departure_date": trip.get("departure_date"),
+                    "return_date": trip.get("return_date"),
+                    "travelers": travelers.get("ages")
+                }
+                
+                # Determine which field to ask about
                 if "destination" in missing:
-                    response = f"{acknowledgment}Where are you traveling to?"
+                    field_to_ask = "destination"
                     state["current_question"] = "destination"
-                    print(f"   💬 Asking: {response}")
                 elif "departure_date" in missing or "departure date" in missing:
-                    response = f"{acknowledgment}When does your trip start? Please provide the date in YYYY-MM-DD format. For example: 2025-12-15"
+                    field_to_ask = "departure_date"
                     state["current_question"] = "departure_date"
-                    print(f"   💬 Asking: {response}")
                 elif "return_date" in missing or "return date" in missing:
-                    response = f"{acknowledgment}When do you return to Singapore? Please provide the date in YYYY-MM-DD format. For example: 2025-12-22"
+                    field_to_ask = "return_date"
                     state["current_question"] = "return_date"
-                    print(f"   💬 Asking: {response}")
                 elif any(x in missing for x in ["travelers", "traveler ages", "number of adults"]):
-                    response = f"{acknowledgment}How many travelers are going, and what are their ages? For example: '2 travelers, ages 30 and 8'"
+                    field_to_ask = "travelers"
                     state["current_question"] = "travelers"
-                    print(f"   💬 Asking: {response}")
+                elif "destination country code" in missing:
+                    # This should be auto-derived from destination, not asked
+                    # If we reach here, destination is probably set but country code derivation failed
+                    field_to_ask = "destination"
+                    state["current_question"] = "destination"
+                    print(f"   ⚠️  Missing country code - re-asking for destination")
                 else:
                     # Fallback if missing list has items we don't recognize
-                    response = f"{acknowledgment}I need a bit more information. Could you tell me about your travelers?"
-                    state["current_question"] = "travelers"
-                    print(f"   ⚠️  Unrecognized missing items: {missing}, defaulting to travelers question")
+                    field_to_ask = "destination"
+                    state["current_question"] = "destination"
+                    print(f"   ⚠️  Unrecognized missing items: {missing}, asking for destination as fallback")
+                
+                # Generate the question using LLM
+                generated_question = question_generator.generate_question(
+                    field=field_to_ask,
+                    collected_info=collected,
+                    conversation_history=state["messages"],
+                    llm_client=llm_client,
+                    use_llm=settings.use_llm_questions
+                )
+                
+                # Prepend acknowledgment if we just came from confirmation
+                response = f"{acknowledgment}{generated_question}" if acknowledgment else generated_question
+                print(f"   💬 Asking: {response[:80]}...")
             # NOTE: This elif branch is REMOVED - confirmation card logic moved to line 962
             # This prevents duplicate/conflicting confirmation card generation
             else:
@@ -1170,19 +1169,55 @@ def create_conversation_graph(db) -> StateGraph:
             
             # Validate required fields
             if not destination:
-                response = "I need your destination to calculate a quote. Where are you traveling to?"
+                collected = {
+                    "destination": trip.get("destination"),
+                    "departure_date": trip.get("departure_date"),
+                    "return_date": trip.get("return_date"),
+                    "travelers": travelers.get("ages")
+                }
+                response = question_generator.generate_question(
+                    field="destination",
+                    collected_info=collected,
+                    conversation_history=state["messages"],
+                    llm_client=llm_client,
+                    use_llm=settings.use_llm_questions
+                )
                 state["messages"].append(AIMessage(content=response))
                 state["current_question"] = "destination"
                 return state
             
             if not departure_date or not return_date:
-                response = "I need your travel dates to calculate a quote. When are you traveling?"
+                collected = {
+                    "destination": trip.get("destination"),
+                    "departure_date": trip.get("departure_date"),
+                    "return_date": trip.get("return_date"),
+                    "travelers": travelers.get("ages")
+                }
+                response = question_generator.generate_question(
+                    field="departure_date",
+                    collected_info=collected,
+                    conversation_history=state["messages"],
+                    llm_client=llm_client,
+                    use_llm=settings.use_llm_questions
+                )
                 state["messages"].append(AIMessage(content=response))
                 state["current_question"] = "departure_date"
                 return state
             
             if not travelers_ages:
-                response = "I need the ages of all travelers to calculate a quote. How many travelers and what are their ages?"
+                collected = {
+                    "destination": trip.get("destination"),
+                    "departure_date": trip.get("departure_date"),
+                    "return_date": trip.get("return_date"),
+                    "travelers": travelers.get("ages")
+                }
+                response = question_generator.generate_question(
+                    field="travelers",
+                    collected_info=collected,
+                    conversation_history=state["messages"],
+                    llm_client=llm_client,
+                    use_llm=settings.use_llm_questions
+                )
                 state["messages"].append(AIMessage(content=response))
                 state["current_question"] = "travelers"
                 return state

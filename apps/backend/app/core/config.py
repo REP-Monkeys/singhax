@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     model_name: str = "llama3-8b-8192"  # Default Groq model
     embedding_model: str = "text-embedding-3-small"
     
+    # Conversational Features
+    use_llm_questions: bool = Field(
+        default=True,
+        description="Use LLM to generate natural, context-aware questions (vs fixed templates)"
+    )
+    
     # Groq Configuration
     groq_model: Optional[str] = None  # Alternative Groq model specification
     groq_temperature: Optional[float] = None

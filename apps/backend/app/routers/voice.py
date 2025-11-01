@@ -68,10 +68,35 @@ async def transcribe_audio(
         
         logger.info(f"   File size: {file_size:.2f}MB")
         
+        # Detect file extension from content type or filename
+        file_extension = ".webm"  # Default
+        if audio.content_type:
+            # Map MIME types to extensions
+            mime_to_ext = {
+                "audio/webm": ".webm",
+                "audio/wav": ".wav",
+                "audio/mp4": ".mp4",
+                "audio/m4a": ".m4a",
+                "audio/mpeg": ".mp3",
+                "audio/mp3": ".mp3",
+                "audio/ogg": ".ogg",
+                "audio/x-m4a": ".m4a"
+            }
+            file_extension = mime_to_ext.get(audio.content_type, ".webm")
+            logger.info(f"   Content-Type: {audio.content_type} -> Extension: {file_extension}")
+        elif audio.filename:
+            # Fallback: use filename extension if available
+            _, ext = os.path.splitext(audio.filename)
+            if ext:
+                file_extension = ext
+                logger.info(f"   Using extension from filename: {file_extension}")
+        
         # Save to temporary file (Whisper API requires file, not bytes)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp:
             temp.write(content)
             temp_file = temp.name
+        
+        logger.info(f"   Saved temp file: {temp_file}")
         
         # Transcribe using Whisper
         logger.info(f"   Calling Whisper API...")

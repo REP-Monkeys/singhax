@@ -1,12 +1,15 @@
 """OCR service for extracting text from images and PDFs."""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from PIL import Image
 import pytesseract
 from pdf2image import convert_from_bytes
 import io
 import os
 from pathlib import Path
+
+if TYPE_CHECKING:
+    from PIL.Image import Image as PILImage
 
 
 class OCRService:
@@ -291,10 +294,10 @@ class OCRService:
     
     def _preprocess_image(
         self,
-        image: Image.Image,
+        image: "Image.Image",
         enhance_contrast: bool = False,
         grayscale: bool = False
-    ) -> Image.Image:
+    ) -> "Image.Image":
         """
         Preprocess image for better OCR accuracy.
         
