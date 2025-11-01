@@ -8,6 +8,8 @@ from app.core.db import get_db
 from app.core.security import get_current_user_supabase as get_current_user
 from app.models.user import User
 from app.models.trip import Trip
+from app.models.quote import Quote
+from app.models.payment import Payment
 from app.schemas.trip import TripCreate, TripResponse
 
 router = APIRouter(prefix="/trips", tags=["trips"])
@@ -59,6 +61,31 @@ async def get_trips(
 
     # Order by created_at desc (newest first)
     trips = query.order_by(Trip.created_at.desc()).all()
+
+    # For completed trips, ensure total_cost shows actual price paid instead of range
+    for trip in trips:
+        if trip.status == "completed" and trip.total_cost and " - " in trip.total_cost:
+            # Trip still shows a range, try to get actual price from completed payment
+            # Get the quote for this trip
+            quote = db.query(Quote).filter(
+                Quote.trip_id == trip.id,
+                Quote.user_id == current_user.id
+            ).order_by(Quote.created_at.desc()).first()
+            
+            if quote:
+                # Check for completed payment
+                completed_payment = db.query(Payment).filter(
+                    Payment.quote_id == quote.id,
+                    Payment.payment_status == "completed"
+                ).first()
+                
+                if completed_payment and quote.price_firm:
+                    # Update trip total_cost to actual price
+                    actual_price = float(quote.price_firm)
+                    trip.total_cost = f"SGD {actual_price:.2f}"
+                    db.commit()
+                    db.refresh(trip)
+                    print(f"💰 Updated trip {trip.id} total_cost to actual price: {trip.total_cost}")
 
     print(f"📋 Fetched {len(trips)} trips for user {current_user.id} (status filter: {status})")
 

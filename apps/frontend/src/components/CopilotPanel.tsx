@@ -43,9 +43,10 @@ interface ConversationState {
 interface CopilotPanelProps {
   conversationState: ConversationState
   sessionId: string
+  onPaymentStarted?: () => void
 }
 
-export function CopilotPanel({ conversationState, sessionId }: CopilotPanelProps) {
+export function CopilotPanel({ conversationState, sessionId, onPaymentStarted }: CopilotPanelProps) {
   const [expandedSections, setExpandedSections] = useState<string[]>(['trip'])
   const [selectedTier, setSelectedTier] = useState<string>('standard')
   const [isProcessingPayment, setIsProcessingPayment] = useState(false)
@@ -164,6 +165,11 @@ export function CopilotPanel({ conversationState, sessionId }: CopilotPanelProps
       console.log('💳 Opening Stripe checkout in new tab:', data.checkout_url)
       window.open(data.checkout_url, '_blank', 'noopener,noreferrer')
       setIsProcessingPayment(false)
+      
+      // Trigger payment polling
+      if (onPaymentStarted) {
+        onPaymentStarted()
+      }
 
     } catch (error: any) {
       console.error('❌ Payment error:', error)

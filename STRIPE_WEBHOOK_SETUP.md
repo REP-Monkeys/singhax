@@ -106,3 +106,4 @@ For production, you don't use Stripe CLI. Instead:
 4. Select events: `checkout.session.completed`, `checkout.session.expired`, `payment_intent.payment_failed`
 5. Copy the signing secret and update `STRIPE_WEBHOOK_SECRET` in production `.env`
 
+

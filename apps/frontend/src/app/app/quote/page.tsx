@@ -13,6 +13,7 @@ import { FileAttachment } from '@/components/FileAttachment'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
+import { usePaymentPolling } from '@/hooks/usePaymentPolling'
 
 interface FileAttachmentData {
   filename: string
@@ -166,6 +167,7 @@ export default function QuotePage() {
   const [isUploading, setIsUploading] = useState(false)
   const [conversationState, setConversationState] = useState<ConversationState>({})
   const [selectedFile, setSelectedFile] = useState<File | null>(null) // File selected but not yet uploaded
+  const [awaitingPayment, setAwaitingPayment] = useState(false) // Track if waiting for payment completion
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -177,8 +179,30 @@ export default function QuotePage() {
     scrollToBottom()
   }, [messages])
 
+  // Poll for payment completion and auto-refresh chat
+  usePaymentPolling({
+    sessionId: currentSessionId,
+    onPaymentComplete: async () => {
+      console.log('🎉 Payment completed! Reloading chat history...')
+      if (currentSessionId) {
+        await loadChatHistory(currentSessionId)
+        setAwaitingPayment(false)
+        // Optional: Show a success notification
+        const successMsg: Message = {
+          id: Date.now().toString(),
+          role: 'assistant',
+          content: '🎉 Payment confirmed! Your policy details are being loaded...',
+          timestamp: new Date()
+        }
+        setMessages(prev => [...prev, successMsg])
+      }
+    },
+    enabled: awaitingPayment
+  })
+
   // Parse plan information from message content
   const parsePlans = (content: string) => {
+    console.log('🔍 [parsePlans] Parsing content:', content.substring(0, 500))
     const plans: Array<{
       name: string
       price: string
@@ -186,16 +210,29 @@ export default function QuotePage() {
       emoji: string
     }> = []
 
-    // Match plan patterns like "🌟 **Standard Plan: $123.45 SGD**" or "⭐ **Elite Plan: $456.78 SGD**"
-    // Updated pattern to capture better
-    const planPattern = /([🌟⭐💎])\s?\*\*([^:]+):\s*\$\s*([0-9,]+\.?\d*)\s*SGD\*\*([\s\S]*?)(?=\n\n[🌟⭐💎]\s?\*\*|\n\n[A-Z💡📊]|\n\nAll prices|$)/g
+    // Match plan patterns - more flexible pattern to catch emojis
+    const planPattern = /([\u{1F300}-\u{1F9FF}])\s?\*\*([^:]+):\s*\$\s*([0-9,]+\.?\d*)\s*SGD\*\*([\s\S]*?)(?=\n\n[\u{1F300}-\u{1F9FF}]\s?\*\*|\n\n[A-Z💡📊]|\n\nAll prices|$)/gu
     
     let match
+    let matchCount = 0
     while ((match = planPattern.exec(content)) !== null) {
-      const emoji = match[1]
+      matchCount++
+      console.log(`🔍 [parsePlans] Match #${matchCount}:`, {
+        emoji: match[1],
+        name: match[2],
+        price: match[3]
+      })
+      let emoji = match[1]
       const name = match[2].trim()
       const price = `$${match[3]} SGD`
       const featuresText = match[4] || ''
+      
+      // Fallback emoji mapping if extraction fails
+      if (!emoji || emoji === '◆') {
+        if (name.toLowerCase().includes('standard')) emoji = '🌟'
+        else if (name.toLowerCase().includes('elite')) emoji = '⭐'
+        else if (name.toLowerCase().includes('premier')) emoji = '👑'
+      }
       
       // Extract features (lines starting with ✓ or *)
       const features = featuresText
@@ -207,9 +244,11 @@ export default function QuotePage() {
 
       if (features.length > 0 || name.includes('Plan')) {
         plans.push({ name, price, features, emoji })
+        console.log(`✅ [parsePlans] Added plan:`, { name, price, emoji, featureCount: features.length })
       }
     }
 
+    console.log(`🔍 [parsePlans] Total plans parsed: ${plans.length}`)
     return plans
   }
 
@@ -222,7 +261,7 @@ export default function QuotePage() {
     }
 
     // Find where plans section starts and ends
-    const firstPlanIndex = content.search(/[🌟⭐💎]\s?\*\*/)
+    const firstPlanIndex = content.search(/[\u{1F300}-\u{1F9FF}]\s?\*\*/u)
     const outroStartIndex = content.indexOf('\n\nAll prices')
     
     const intro = firstPlanIndex > 0 ? content.substring(0, firstPlanIndex).trim() : ''
@@ -816,13 +855,22 @@ export default function QuotePage() {
                                   </div>
                                 )}
                                 {plans.length > 0 && (
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                                  <div className={`grid grid-cols-1 ${plans.length === 2 ? 'md:grid-cols-2' : 'md:grid-cols-3'} gap-3 mb-4`}>
                                     {plans.map((plan, index) => (
                                       <Card key={index} className="border border-gray-200 hover:border-gray-300 transition-colors">
                                         <CardHeader className="pb-3">
-                                          <CardTitle className="text-lg flex items-center gap-2">
-                                            <span>{plan.emoji}</span>
-                                            <span>{plan.name}</span>
+                                          <CardTitle className="text-base flex items-start gap-2 min-h-[3rem]">
+                                            <span className="text-2xl flex-shrink-0" style={{ fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif' }}>
+                                              {plan.emoji}
+                                            </span>
+                                            <span className="break-words font-semibold leading-tight text-sm">
+                                              {plan.name.replace('(Recommended for adventure sports)', '').trim()}
+                                              {plan.name.includes('Recommended') && (
+                                                <span className="block text-xs text-gray-500 font-normal mt-0.5">
+                                                  Recommended for adventure sports
+                                                </span>
+                                              )}
+                                            </span>
                                           </CardTitle>
                                           <CardDescription className="text-xl font-bold text-black mt-2">
                                             {plan.price}
@@ -832,8 +880,8 @@ export default function QuotePage() {
                                           <ul className="space-y-1.5">
                                             {plan.features.map((feature, idx) => (
                                               <li key={idx} className="text-xs text-gray-600 flex items-start">
-                                                <span className="text-green-600 mr-1.5">✓</span>
-                                                <span>{feature}</span>
+                                                <span className="text-green-600 mr-1.5 flex-shrink-0">✓</span>
+                                                <span className="break-words">{feature}</span>
                                               </li>
                                             ))}
                                           </ul>
@@ -1064,7 +1112,14 @@ export default function QuotePage() {
               <div 
                 className="flex-1 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
               >
-                <CopilotPanel conversationState={conversationState} sessionId={currentSessionId || ''} />
+                <CopilotPanel 
+                  conversationState={conversationState} 
+                  sessionId={currentSessionId || ''}
+                  onPaymentStarted={() => {
+                    console.log('💳 Payment initiated, starting polling...')
+                    setAwaitingPayment(true)
+                  }}
+                />
               </div>
             </div>
           </div>

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """LangGraph conversation orchestration."""
 
 from typing import Dict, Any, List, Optional, TypedDict, Annotated
@@ -19,6 +20,7 @@ from app.services.question_generator import QuestionGenerator
 from app.services.policy_recommender import PolicyRecommender
 from app.core.config import settings
 from app.models.trip import Trip
+import re
 
 # Singleton checkpointer to avoid connection pool conflicts
 _checkpointer_singleton = None
@@ -1054,13 +1056,9 @@ def create_conversation_graph(db) -> StateGraph:
                 ages = ", ".join(map(str, travelers.get("ages", []))) if travelers.get("ages") else "Not specified"
 
                 # ONLY show what was extracted from the document - NO adventure_sports yet
-                response = f"""Let me confirm your trip details:
-
-📍 Destination: {dest}
-📅 Travel dates: {dep_formatted} to {ret_formatted} ({duration_days} days)
-👥 Travelers: {len(travelers['ages'])} traveler(s) (ages: {ages})
-
-Is this information correct? (yes/no)"""
+                # Use simple, clean format without emoji
+                traveler_text = f"{len(travelers['ages'])} traveler" if len(travelers['ages']) == 1 else f"{len(travelers['ages'])} travelers"
+                response = f"Let me confirm your trip details:\n\nDestination: {dest}\nTravel dates: {dep_formatted} to {ret_formatted} ({duration_days} days)\nTravelers: {traveler_text} (ages: {ages})\n\nIs this information correct?"
 
                 state["awaiting_confirmation"] = True
                 state["current_question"] = "confirmation"
@@ -1507,62 +1505,77 @@ Is this information correct? (yes/no)"""
                     print(f"   ⚠️  Failed to create/update quote with JSON structures: {e}")
                     traceback.print_exc()
 
-            # Format a beautiful response with all tiers
+            # Format response with plan cards - frontend parses this format to render side-by-side cards
+            # NOTE: Pricing service now ensures ALL three tiers (standard, elite, premier) are always present
             quotes = quote_result["quotes"]
             dest_name = destination.title()
             
+            # DEBUG: Log all tiers to verify they're present
+            logger.info(f"🔍 DEBUG: Number of tiers in quotes: {len(quotes)}")
+            logger.info(f"🔍 DEBUG: Available tiers: {list(quotes.keys())}")
+            for tier_name, tier_data in quotes.items():
+                logger.info(f"🔍 DEBUG: {tier_name} - ${tier_data.get('price')} SGD")
+            
+            # Always show all three payment plans regardless of recommendation
             response_parts = [f"Great! Here are your travel insurance options for {dest_name}:\n"]
             
             if "standard" in quotes:
                 std = quotes["standard"]
-                response_parts.append(f"""
-🌟 **Standard Plan: ${std['price']:.2f} SGD**
-   ✓ Medical coverage: ${std['coverage']['medical_coverage']:,}
-   ✓ Trip cancellation: ${std['coverage']['trip_cancellation']:,}
-   ✓ Baggage protection: ${std['coverage']['baggage_loss']:,}
-   ✓ Personal accident: ${std['coverage']['personal_accident']:,}
-""")
+                response_parts.append(f"🌟 **Standard Plan: ${std['price']:.2f} SGD**")
+                response_parts.append(f"   ✓ Medical coverage: ${std['coverage']['medical_coverage']:,}")
+                response_parts.append(f"   ✓ Trip cancellation: ${std['coverage']['trip_cancellation']:,}")
+                response_parts.append(f"   ✓ Baggage protection: ${std['coverage']['baggage_loss']:,}")
+                response_parts.append(f"   ✓ Personal accident: ${std['coverage']['personal_accident']:,}")
+                response_parts.append("")
             
             if "elite" in quotes:
                 elite = quotes["elite"]
-                response_parts.append(f"""
-⭐ **Elite Plan: ${elite['price']:.2f} SGD**{' (Recommended for adventure sports)' if adventure_sports else ''}
-   ✓ Medical coverage: ${elite['coverage']['medical_coverage']:,}
-   ✓ Trip cancellation: ${elite['coverage']['trip_cancellation']:,}
-   ✓ Baggage protection: ${elite['coverage']['baggage_loss']:,}
-   ✓ Personal accident: ${elite['coverage']['personal_accident']:,}
-   ✓ Adventure sports coverage included
-""")
+                elite_label = "Elite Plan (Recommended for adventure sports)" if adventure_sports else "Elite Plan"
+                response_parts.append(f"⭐ **{elite_label}: ${elite['price']:.2f} SGD**")
+                response_parts.append(f"   ✓ Medical coverage: ${elite['coverage']['medical_coverage']:,}")
+                response_parts.append(f"   ✓ Trip cancellation: ${elite['coverage']['trip_cancellation']:,}")
+                response_parts.append(f"   ✓ Baggage protection: ${elite['coverage']['baggage_loss']:,}")
+                response_parts.append(f"   ✓ Personal accident: ${elite['coverage']['personal_accident']:,}")
+                response_parts.append("   ✓ Adventure sports coverage included")
+                response_parts.append("")
             
             if "premier" in quotes:
                 premier = quotes["premier"]
-                response_parts.append(f"""
-💎 **Premier Plan: ${premier['price']:.2f} SGD**
-   ✓ Medical coverage: ${premier['coverage']['medical_coverage']:,}
-   ✓ Trip cancellation: ${premier['coverage']['trip_cancellation']:,}
-   ✓ Baggage protection: ${premier['coverage']['baggage_loss']:,}
-   ✓ Personal accident: ${premier['coverage']['personal_accident']:,}
-   ✓ Full adventure sports coverage
-   ✓ Emergency evacuation: ${premier['coverage']['emergency_evacuation']:,}
-""")
+                response_parts.append(f"👑 **Premier Plan: ${premier['price']:.2f} SGD**")
+                response_parts.append(f"   ✓ Medical coverage: ${premier['coverage']['medical_coverage']:,}")
+                response_parts.append(f"   ✓ Trip cancellation: ${premier['coverage']['trip_cancellation']:,}")
+                response_parts.append(f"   ✓ Baggage protection: ${premier['coverage']['baggage_loss']:,}")
+                response_parts.append(f"   ✓ Personal accident: ${premier['coverage']['personal_accident']:,}")
+                response_parts.append("   ✓ Full adventure sports coverage")
+                response_parts.append(f"   ✓ Emergency evacuation: ${premier['coverage']['emergency_evacuation']:,}")
+                response_parts.append("")
             
-            response_parts.append("\nAll prices are in Singapore Dollars (SGD). Would you like more details about any plan?")
+            response_parts.append("All prices are in Singapore Dollars (SGD).")
+            response_parts.append("\nWould you like more details about any plan?")
             
             # Add note if using fallback pricing
             if quote_result.get("fallback"):
-                response_parts.append("\n\n⚠️ *Note: Quote calculated using estimated pricing. Our pricing service is temporarily unavailable, but these estimates should give you a good idea of costs.*")
+                response_parts.append("\nNote: Quote calculated using estimated pricing. Our pricing service is temporarily unavailable, but these estimates should give you a good idea of costs.")
             
             # Add risk narrative if available
             if state.get("risk_narrative"):
-                response_parts.append(f"\n\n📊 **Risk Analysis:**\n{state['risk_narrative']}")
+                response_parts.append(f"\nRisk Analysis:\n{state['risk_narrative']}")
                 
                 # Highlight recommended tier
                 if state.get("claims_insights"):
                     recommended = state["claims_insights"]["tier_recommendation"]["recommended_tier"]
                     if recommended != "standard":
-                        response_parts.append(f"\n\n💡 **Based on historical data, we recommend the {recommended.title()} plan for optimal coverage.**")
+                        response_parts.append(f"\nBased on historical data, we recommend the {recommended.title()} plan for optimal coverage.")
             
             response = "\n".join(response_parts)
+            
+            # DEBUG: Log final response
+            logger.info(f"🔍 DEBUG: Final response ({len(response)} chars)")
+            logger.info(f"🔍 DEBUG: Contains 'Standard': {'Standard' in response}")
+            logger.info(f"🔍 DEBUG: Contains 'Elite': {'Elite' in response}")
+            logger.info(f"🔍 DEBUG: Contains 'Premier': {'Premier' in response}")
+            logger.info(f"🔍 DEBUG: Response preview:\n{response[:800]}")
+            
             state["messages"].append(AIMessage(content=response))
             
             # CRITICAL: Mark pricing as complete to prevent re-entry
@@ -1612,7 +1625,7 @@ Is this information correct? (yes/no)"""
                         
                         if policy_result.get("success"):
                             policy_number = policy_result.get("policy_number")
-                            response = f"🎉 Payment successful! Your policy has been created.\n\nPolicy Number: **{policy_number}**\n\nYour travel insurance is now active. You'll receive a confirmation email shortly."
+                            response = f"Payment successful! Your policy has been created.\n\nYour Policy Number is: {policy_number}\n\nYour travel insurance is now active. You'll receive a confirmation email shortly with all the details."
                             state["_policy_created"] = True
                             state["_awaiting_payment_confirmation"] = False
                         else:
@@ -1782,7 +1795,7 @@ Is this information correct? (yes/no)"""
                     state["_awaiting_payment_confirmation"] = True
                     state["_checkout_url_sent"] = True  # Flag to prevent re-entry
 
-                    response = f"Great! I've set up your payment for the **{tier.title()}** plan (${price:.2f} SGD).\n\nPlease complete your payment at:\n{checkout_url}\n\nI'll wait here and confirm once payment is successful. This usually takes 10-30 seconds after you complete the payment."
+                    response = f"Great! I've set up your payment for the {tier.title()} plan (${price:.2f} SGD).\n\nPlease complete your payment at:\n{checkout_url}\n\nI'll wait here and confirm once payment is successful. This usually takes 10-30 seconds after you complete the payment."
 
                 state["messages"].append(AIMessage(content=response))
             
@@ -1949,16 +1962,15 @@ Guidelines:
 1. Be specific and direct - cite exact coverage amounts
 2. Use the policy sections provided above for accurate information
 3. If user has a policy, personalize the answer to THEIR coverage
-4. Use bullet points for clarity
-5. Include citations like "[Section 6: Medical Coverage]"
-6. If asked about exclusions, be clear about what's NOT covered
-7. If information isn't in the provided sections, say so clearly
+4. Write in a conversational, easy-to-read style
+5. Break information into short, digestible sentences
+6. Avoid markdown formatting (no asterisks, headers, or bullet points)
+7. Include citations like "[Section 6: Medical Coverage]"
+8. If asked about exclusions, be clear about what's NOT covered
+9. If information isn't in the provided sections, say so clearly
+10. Keep responses concise - aim for 2-3 short paragraphs maximum
 
-Format your response with:
-- Clear answer to their question
-- Specific coverage amounts (if applicable)
-- Relevant exclusions or conditions
-- Citation to policy sections"""
+Write your response in plain text, conversational format. Keep each sentence short and clear."""
 
         try:
             # Use llm_client.llm (ChatGroq instance) directly
@@ -1970,10 +1982,13 @@ Format your response with:
             ])
 
             response_text = response_obj.content
+            
+            # Clean markdown from response
+            response_text = clean_markdown(response_text)
 
             # Add helpful footer if user has policy
             if user_context.get("has_policy"):
-                response_text += f"\n\n---\n📋 Your Policy: {user_context['policy_number']}\n📅 Valid: {user_context['effective_date']} to {user_context['expiry_date']}"
+                response_text += f"\n\nYour Policy: {user_context['policy_number']}\nValid from: {user_context['effective_date']} to {user_context['expiry_date']}"
             
         except Exception as e:
             print(f"   ⚠️  LLM generation failed: {e}")
@@ -1981,7 +1996,7 @@ Format your response with:
             if search_results:
                 response_text = "Based on the policy documents:\n\n"
                 for result in search_results[:2]:
-                    response_text += f"**{result['heading']}** (Section {result['section_id']})\n{result['text'][:300]}...\n\n"
+                    response_text += f"{result['heading']} (Section {result['section_id']})\n{result['text'][:300]}...\n\n"
             else:
                 response_text = "I couldn't find specific information in our policy documents. Please contact customer service for detailed assistance."
         
@@ -2288,11 +2303,11 @@ Format your response with:
                 high_conf_fields = extracted_json.get("high_confidence_fields", [])
                 low_conf_fields = extracted_json.get("low_confidence_fields", [])
                 if high_conf_fields or low_conf_fields:
-                    response += f"\n\n**Confidence levels:**"
+                    response += f"\n\nConfidence levels:"
                     if high_conf_fields:
-                        response += f"\n• High confidence ({len(high_conf_fields)} fields): Ready to use"
+                        response += f"\nHigh confidence ({len(high_conf_fields)} fields): Ready to use"
                     if low_conf_fields:
-                        response += f"\n• Medium confidence ({len(low_conf_fields)} fields): Please verify"
+                        response += f"\nMedium confidence ({len(low_conf_fields)} fields): Please verify"
                 
                 # Check for missing Ancileo API required fields
                 missing_fields = []
@@ -2312,7 +2327,7 @@ Format your response with:
                 if missing_fields:
                     response += f"\n\nI still need a few more details to get you the best quote: {', '.join(missing_fields)}. Let me ask you about these now!"
                 else:
-                    response += "\n\n**Please confirm if these details are correct.** If everything looks good, I'll recommend the best insurance plan for your trip!"
+                    response += "\n\nPlease confirm if these details are correct. If everything looks good, I'll recommend the best insurance plan for your trip!"
                     # Set awaiting confirmation flag only if all fields are present
                     state["awaiting_confirmation"] = True
                     state["confirmation_type"] = "document_extraction"
@@ -2382,8 +2397,8 @@ Format your response with:
                     
                     response = f"I see you've uploaded a document related to a {claim_type} claim.\n\n"
                     response += f"For {claim_type} claims, you'll need:\n\n"
-                    response += f"**Documents:** {', '.join(req_docs)}\n\n"
-                    response += f"**Information:** {', '.join(req_info)}\n\n"
+                    response += f"Documents: {', '.join(req_docs)}\n\n"
+                    response += f"Information: {', '.join(req_info)}\n\n"
                     response += "I've extracted the text from your document. Would you like help filling out the claim form?"
                 else:
                     response = "I've received your document. What type of claim are you looking to file?"

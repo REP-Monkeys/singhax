@@ -430,9 +430,8 @@ class PricingService:
         # Build quotes structure
         quotes = {}
         for tier_name, tier_data in tiers.items():
-            # Skip tier if adventure sports required but tier doesn't support it
-            if adventure_sports and not tier_data.get("coverage", {}).get("adventure_sports", False):
-                continue
+            # Include ALL tiers - users can see what coverage they're getting
+            # Don't skip standard even if adventure sports is required - let users choose
             
             quotes[tier_name] = {
                 "tier": tier_name,
@@ -447,6 +446,26 @@ class PricingService:
                     "multiplier": tier_data.get("multiplier")
                 }
             }
+        
+        # Ensure ALL three tiers are always present
+        # Ancileo adapter should provide all three, but add safeguard
+        for tier in ["standard", "elite", "premier"]:
+            if tier not in quotes and tier in tiers:
+                # This shouldn't happen, but include it just in case
+                tier_data = tiers[tier]
+                quotes[tier] = {
+                    "tier": tier,
+                    "price": tier_data.get("price"),
+                    "currency": tier_data.get("currency", "SGD"),
+                    "coverage": tier_data.get("coverage"),
+                    "breakdown": {
+                        "duration_days": duration,
+                        "travelers_count": len(travelers_ages),
+                        "area": area.value,
+                        "source": "ancileo_api",
+                        "multiplier": tier_data.get("multiplier")
+                    }
+                }
         
         # Determine recommended tier
         if adventure_sports:
@@ -957,6 +976,43 @@ class PricingService:
                     "base_claims": stats["total_claims"]
                 }
             }
+        
+        # Ensure ALL three tiers are always present - fill missing ones from Ancileo
+        ancileo_quotes = ancileo_quote.get("quotes", {})
+        for tier in ["standard", "elite", "premier"]:
+            if tier not in quotes:
+                # Try to get from Ancileo quotes
+                if tier in ancileo_quotes:
+                    quotes[tier] = ancileo_quotes[tier].copy()
+                    quotes[tier]["breakdown"] = {
+                        "duration_days": duration,
+                        "travelers_count": len(travelers_ages),
+                        "area": area.value,
+                        "source": "ancileo_fallback",
+                        "base_claims": stats["total_claims"]
+                    }
+                else:
+                    # Calculate using tier multipliers from an existing tier
+                    # Use elite as baseline if available, otherwise standard
+                    baseline_tier = "elite" if "elite" in quotes else ("standard" if "standard" in quotes else "premier")
+                    if baseline_tier in quotes:
+                        baseline_price = quotes[baseline_tier]["price"]
+                        multiplier = TIER_MULTIPLIERS[tier] / TIER_MULTIPLIERS[baseline_tier]
+                        calculated_price = round(baseline_price * multiplier, 2)
+                        quotes[tier] = {
+                            "tier": tier,
+                            "price": calculated_price,
+                            "currency": "SGD",
+                            "coverage": TIER_COVERAGE[tier],
+                            "data_backed": False,
+                            "breakdown": {
+                                "duration_days": duration,
+                                "travelers_count": len(travelers_ages),
+                                "area": area.value,
+                                "source": "calculated_fallback",
+                                "base_claims": stats["total_claims"]
+                            }
+                        }
         
         # Determine recommended tier
         if adventure_sports:

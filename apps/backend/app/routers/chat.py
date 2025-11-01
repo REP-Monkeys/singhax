@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Chat conversation API endpoints."""
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
@@ -22,7 +23,7 @@ from app.schemas.chat import (
     ChatSessionState,
     ImageUploadResponse
 )
-from app.agents.graph import create_conversation_graph, get_or_create_checkpointer
+from app.agents.graph import create_conversation_graph, get_or_create_checkpointer, clean_markdown
 from app.services.ocr import OCRService, JSONExtractor
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -207,6 +208,12 @@ async def send_message(
             if isinstance(msg, AIMessage):
                 agent_response = msg.content
                 break
+    
+    # Clean markdown formatting, but preserve plan card formatting (frontend needs it)
+    # Check if response contains plan cards (has plan emojis and ** pattern)
+    has_plan_cards = any(emoji in agent_response for emoji in ['🌟', '⭐', '👑']) and '**' in agent_response
+    if not has_plan_cards:
+        agent_response = clean_markdown(agent_response)
     
     # Extract quote data if available
     quote_data = result.get("quote_data")

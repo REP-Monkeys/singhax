@@ -26,7 +26,7 @@ export function VoiceButton({
   const [mode, setMode] = useState<'idle' | 'recording' | 'processing' | 'speaking'>('idle')
   const [transcript, setTranscript] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [autoRestartDisabled, setAutoRestartDisabled] = useState(false)
+  const [autoRestartDisabled, setAutoRestartDisabled] = useState(true)
   const audioEndCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
   const recorder = useAudioRecorder()
@@ -44,8 +44,8 @@ export function VoiceButton({
     console.log('🎤 [VoiceButton] Starting recording...')
     setError(null)
     setTranscript('')
-    // Re-enable auto-restart when user manually starts recording (they want to use voice again)
-    setAutoRestartDisabled(false)
+    // Auto-restart is now permanently disabled
+    // setAutoRestartDisabled(false)
 
     try {
       await recorder.startRecording()

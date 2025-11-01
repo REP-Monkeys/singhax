@@ -493,10 +493,23 @@ async def handle_payment_success(session_data: Dict[str, Any], db: Session):
         policy_id = policy_result.get("policy_id")
         logger.info(f"Successfully created policy {policy_number} (ID: {policy_id})")
         
-        # Update trip status to "confirmed"
-        trip.status = "confirmed"
+        # Update trip status to "completed" (payment successful, policy created)
+        trip.status = "completed"
+        
+        # Update trip total_cost to show actual price paid instead of range
+        if quote.price_firm:
+            # Format as "SGD {price:.2f}" to match the format used elsewhere
+            actual_price = float(quote.price_firm)
+            trip.total_cost = f"SGD {actual_price:.2f}"
+            logger.info(f"💰 Updated trip {trip.id} total_cost to actual price: {trip.total_cost}")
+        elif payment.amount:
+            # Fallback to payment amount (stored in cents, convert to dollars)
+            actual_price = float(payment.amount) / 100.0
+            trip.total_cost = f"SGD {actual_price:.2f}"
+            logger.info(f"💰 Updated trip {trip.id} total_cost from payment amount: {trip.total_cost}")
+        
         db.commit()
-        logger.info(f"Updated trip {trip.id} status to confirmed")
+        logger.info(f"✅ Updated trip {trip.id} status to completed")
         
         # Send confirmation message to chat session if session_id exists
         if chat_session_id:
