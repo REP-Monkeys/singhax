@@ -12,6 +12,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from cryptography.fernet import Fernet
 import base64
 import hashlib
+import json
 
 from app.core.config import settings
 from app.core.db import get_db
@@ -78,6 +79,11 @@ def verify_supabase_token(token: str) -> Optional[Dict[str, Any]]:
         # Get JWT secret - try dedicated JWT secret first, fallback to service role key
         jwt_secret = settings.supabase_jwt_secret or settings.supabase_service_role_key
 
+        # DEBUG: Print configuration status
+        print(f"[DEBUG] supabase_jwt_secret is set: {settings.supabase_jwt_secret is not None}")
+        print(f"[DEBUG] supabase_service_role_key is set: {settings.supabase_service_role_key is not None}")
+        print(f"[DEBUG] Will use: {'JWT_SECRET' if settings.supabase_jwt_secret else 'SERVICE_ROLE_KEY'}")
+
         if not jwt_secret:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -86,6 +92,24 @@ def verify_supabase_token(token: str) -> Optional[Dict[str, Any]]:
 
         print(f"[DEBUG] Using JWT secret: {jwt_secret[:20]}... (length: {len(jwt_secret)})")
         print(f"[DEBUG] Token first 50 chars: {token[:50]}...")
+
+        # DEBUG: Try to decode without verification to see header and payload
+        try:
+            unverified_payload = jwt.decode(token, "", algorithms=[], options={"verify_signature": False, "verify_aud": False, "verify_exp": False})
+            print(f"[DEBUG] Token payload (unverified): {json.dumps(unverified_payload, indent=2, default=str)}")
+        except Exception as decode_error:
+            print(f"[DEBUG] Could not decode token payload: {decode_error}")
+        
+        # DEBUG: Decode header separately
+        try:
+            header_part = token.split('.')[0]
+            # Add padding if needed for base64 decode
+            header_part += '=' * (4 - len(header_part) % 4)
+            header_bytes = base64.urlsafe_b64decode(header_part)
+            header_json = json.loads(header_bytes)
+            print(f"[DEBUG] Token header: {json.dumps(header_json, indent=2)}")
+        except Exception as header_error:
+            print(f"[DEBUG] Could not decode token header: {header_error}")
 
         # Decode and verify the Supabase JWT
         # Supabase uses HS256 algorithm

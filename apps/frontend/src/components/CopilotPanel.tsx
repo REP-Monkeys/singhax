@@ -125,7 +125,7 @@ export function CopilotPanel({ conversationState }: CopilotPanelProps) {
         <div className="px-5 py-4 border-b border-gray-200">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-              <Plane className="w-5 h-5 mr-2 text-black" />
+              <Plane className="w-5 h-5 mr-2" style={{ color: '#dd2930' }} />
               <h3 className="font-semibold text-black">Trip summary</h3>
             </div>
             <Button
@@ -191,7 +191,7 @@ export function CopilotPanel({ conversationState }: CopilotPanelProps) {
         <div className="px-5 py-4 border-b border-gray-200">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-              <Users className="w-5 h-5 mr-2 text-black" />
+              <Users className="w-5 h-5 mr-2" style={{ color: '#dd2930' }} />
               <h3 className="font-semibold text-black">Travelers</h3>
             </div>
             <Button
@@ -238,7 +238,7 @@ export function CopilotPanel({ conversationState }: CopilotPanelProps) {
         <div className="px-5 py-4 border-b border-gray-200">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-              <DollarSign className="w-5 h-5 mr-2 text-black" />
+              <DollarSign className="w-5 h-5 mr-2" style={{ color: '#dd2930' }} />
               <h3 className="font-semibold text-black">Selected plan</h3>
             </div>
             <Button
@@ -291,7 +291,7 @@ export function CopilotPanel({ conversationState }: CopilotPanelProps) {
         <div className="px-5 py-4 border-b border-gray-200">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-              <DollarSign className="w-5 h-5 mr-2 text-black" />
+              <DollarSign className="w-5 h-5 mr-2" style={{ color: '#dd2930' }} />
               <h3 className="font-semibold text-black">Pricing</h3>
             </div>
             <Button
@@ -330,11 +330,11 @@ export function CopilotPanel({ conversationState }: CopilotPanelProps) {
       <div className="border border-gray-200 rounded-2xl bg-white shadow-sm p-5">
         <div className="space-y-3">
           {!hasQuote ? (
-            <Button className="w-full bg-black hover:bg-gray-800 text-white font-medium rounded-full" disabled>
+            <Button className="w-full text-white font-medium rounded-full hover:opacity-90" style={{ backgroundColor: '#dd2930' }} disabled>
               Continue chatting to get quote
             </Button>
           ) : (
-            <Button className="w-full bg-black hover:bg-gray-800 text-white font-medium rounded-full">
+            <Button className="w-full text-white font-medium rounded-full hover:opacity-90" style={{ backgroundColor: '#dd2930' }}>
               Proceed to payment
             </Button>
           )}

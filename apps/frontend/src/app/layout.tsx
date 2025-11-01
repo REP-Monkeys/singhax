@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ConvoTravelInsure",
+  title: "TripMate",
   description: "Smart travel insurance with conversational AI",
 };
 

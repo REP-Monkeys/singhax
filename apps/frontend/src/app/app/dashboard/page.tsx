@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/card'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
-import { LogOut, Plus, MapPin, Calendar, Users, Plane, Loader2 } from 'lucide-react'
+import { LogOut, Plus, MapPin, Calendar, Users, Plane, Loader2, Phone } from 'lucide-react'
 
 interface Trip {
   id: string
@@ -272,21 +272,20 @@ export default function DashboardPage() {
 
   return (
     <ProtectedRoute requireOnboarding={true}>
-      <div className="min-h-screen bg-white">
+      <div className="min-h-screen overflow-y-auto" style={{ backgroundImage: 'linear-gradient(120deg, #fdfbfb 0%, #ebedee 100%)' }}>
         {/* Header */}
-        <header className="border-b border-gray-200 bg-white sticky top-0 z-10">
+        <header className="border-b border-gray-200 bg-white sticky top-0 z-10 shadow-md">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
             <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-2xl font-semibold text-black">ConvoTravelInsure</h1>
-                {user && (
-                  <p className="text-sm text-gray-600 mt-1">Welcome back, {user.name}</p>
-                )}
+              <div className="flex items-center gap-2">
+                <Plane className="w-8 h-8" style={{ color: '#dd2930' }} />
+                <h1 className="text-3xl font-semibold" style={{ color: '#dd2930' }}>TripMate</h1>
               </div>
               <div className="flex items-center gap-3">
                 <Button
                   onClick={handleNewTrip}
-                  className="bg-black hover:bg-gray-800 text-white font-medium rounded-full px-6"
+                  className="text-white font-medium rounded-full px-6 hover:opacity-90"
+                  style={{ backgroundColor: '#dd2930' }}
                 >
                   <Plus className="w-4 h-4 mr-2" />
                   New Trip
@@ -294,8 +293,23 @@ export default function DashboardPage() {
                 <Button
                   variant="ghost"
                   size="sm"
+                  className="text-gray-700 hover:text-black hover:bg-gray-100"
+                >
+                  <Phone className="w-4 h-4 mr-1.5" />
+                  Human support
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-gray-700 hover:text-black hover:bg-gray-100"
+                >
+                  My policies
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={logout}
-                  className="text-gray-700 hover:text-black"
+                  className="text-gray-700 hover:text-black hover:bg-gray-100"
                 >
                   <LogOut className="w-4 h-4 mr-2" />
                   Logout
@@ -307,33 +321,34 @@ export default function DashboardPage() {
 
         {/* Main Content */}
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          {user && (
+            <p className="text-2xl font-bold mb-6 text-black">Welcome back, {user.name}</p>
+          )}
           {/* Tabs */}
-          <div className="flex gap-6 border-b border-gray-200 mb-8">
+          <div className="flex gap-6 border-b border-gray-200 mb-8 h-[48px]">
             <button
               onClick={() => setActiveTab('upcoming')}
-              className={`pb-3 px-1 font-medium text-sm transition-colors relative ${
-                activeTab === 'upcoming'
-                  ? 'text-black'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
+              className={`pb-3 px-1 font-medium text-base transition-colors relative h-full flex items-end hover:opacity-80`}
+              style={{ color: '#dd2930' }}
             >
-              Upcoming & Ongoing
-              {activeTab === 'upcoming' && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-black" />
-              )}
+              <span className="relative">
+                Upcoming & Ongoing
+                {activeTab === 'upcoming' && (
+                  <div className="absolute bottom-[-12px] left-0 right-0 h-0.5" style={{ backgroundColor: '#dd2930' }} />
+                )}
+              </span>
             </button>
             <button
               onClick={() => setActiveTab('past')}
-              className={`pb-3 px-1 font-medium text-sm transition-colors relative ${
-                activeTab === 'past'
-                  ? 'text-black'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
+              className={`pb-3 px-1 font-medium text-base transition-colors relative h-full flex items-end hover:opacity-80`}
+              style={{ color: '#dd2930' }}
             >
-              Past Trips
-              {activeTab === 'past' && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-black" />
-              )}
+              <span className="relative">
+                Past Trips
+                {activeTab === 'past' && (
+                  <div className="absolute bottom-[-12px] left-0 right-0 h-0.5" style={{ backgroundColor: '#dd2930' }} />
+                )}
+              </span>
             </button>
           </div>
 
@@ -366,7 +381,8 @@ export default function DashboardPage() {
               {activeTab === 'upcoming' && (
                 <Button
                   onClick={handleNewTrip}
-                  className="bg-black hover:bg-gray-800 text-white font-medium rounded-full px-6"
+                  className="text-white font-medium rounded-full px-6 hover:opacity-90"
+                  style={{ backgroundColor: '#dd2930' }}
                 >
                   <Plus className="w-4 h-4 mr-2" />
                   Start Your First Trip
@@ -380,10 +396,10 @@ export default function DashboardPage() {
                 <Card
                   key={trip.id}
                   onClick={() => handleTripClick(trip)}
-                  className="group cursor-pointer hover:shadow-lg transition-shadow duration-200 overflow-hidden border border-gray-200 rounded-xl"
+                  className="group cursor-pointer hover:shadow-lg transition-shadow duration-200 overflow-hidden border border-gray-200 rounded-xl bg-white"
                 >
                   {/* Trip Image */}
-                  <div className="aspect-[4/3] bg-gradient-to-br from-blue-400 via-blue-500 to-indigo-600 relative overflow-hidden">
+                  <div className="aspect-[4/3] relative overflow-hidden" style={{ backgroundImage: 'linear-gradient(to top, #ff0844 0%, #ffb199 100%)' }}>
                     {trip.destinations.length > 0 && getDestinationImageUrl(trip.destinations[0]) ? (
                       <img
                         src={getDestinationImageUrl(trip.destinations[0])!}
@@ -422,24 +438,22 @@ export default function DashboardPage() {
                       </div>
                     )}
                     
-                    <div className="absolute inset-0 bg-black/10 group-hover:bg-black/5 transition-colors" />
                     <div className="absolute top-3 right-3">
                       <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusBadge(trip.status)}`}>
                         {trip.status.charAt(0).toUpperCase() + trip.status.slice(1)}
                       </span>
                     </div>
-                    {trip.destinations.length > 0 && (
-                      <div className="absolute bottom-3 left-3 text-white">
-                        <h3 className="text-xl font-semibold drop-shadow">
-                          {trip.destinations[0]}
-                        </h3>
-                      </div>
-                    )}
                   </div>
 
                   {/* Trip Details */}
-                  <div className="p-4">
+                  <div className="p-4 bg-white">
                     <div className="space-y-2">
+                      {/* Destination Name */}
+                      {trip.destinations.length > 0 && (
+                        <h3 className="text-xl font-semibold text-black mb-2">
+                          {trip.destinations[0]}
+                        </h3>
+                      )}
                       {/* Dates */}
                       {(trip.start_date || trip.end_date) && (
                         <div className="flex items-center text-sm text-gray-600">

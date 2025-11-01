@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -231,10 +232,10 @@ export default function OnboardingPage() {
 
   return (
     <ProtectedRoute requireOnboarding={false}>
-      <div className="min-h-screen bg-white py-12 px-4 sm:px-6 lg:px-8">
+      <div className="min-h-screen py-12 px-4 sm:px-6 lg:px-8" style={{ backgroundImage: 'linear-gradient(120deg, #fdfbfb 0%, #ebedee 100%)' }}>
       <div className="max-w-2xl mx-auto">
         <div className="text-center mb-12">
-          <h1 className="text-2xl font-semibold text-black tracking-tight">ConvoTravelInsure</h1>
+          <h1 className="text-2xl font-semibold text-black tracking-tight">TripMate</h1>
           <h2 className="mt-6 text-3xl font-bold text-black tracking-tight">
             Complete your profile
           </h2>
@@ -564,7 +565,8 @@ export default function OnboardingPage() {
                   <Button
                     type="button"
                     onClick={handleNext}
-                    className="ml-auto bg-black hover:bg-gray-800 text-white font-medium rounded-full px-6"
+                    className="ml-auto text-white font-medium rounded-full px-6 hover:opacity-90"
+                    style={{ backgroundColor: '#dd2930' }}
                   >
                     Continue
                   </Button>
@@ -572,7 +574,8 @@ export default function OnboardingPage() {
                   <Button
                     type="submit"
                     disabled={loading}
-                    className="ml-auto bg-black hover:bg-gray-800 text-white font-medium rounded-full px-6"
+                    className="ml-auto text-white font-medium rounded-full px-6 hover:opacity-90"
+                    style={{ backgroundColor: '#dd2930' }}
                   >
                     {loading ? 'Submitting...' : 'Complete setup'}
                   </Button>
@@ -580,6 +583,14 @@ export default function OnboardingPage() {
               </div>
             </form>
           </div>
+        </div>
+
+        <div className="text-center mt-8">
+          <Link href="/">
+            <Button variant="ghost" className="text-gray-600 hover:text-gray-700 hover:bg-gray-100 font-medium">
+              ← Back to home
+            </Button>
+          </Link>
         </div>
       </div>
     </div>

@@ -74,6 +74,16 @@ async def startup_event():
         print(f"⚠️  Database connection failed (will retry on first request): {str(e)[:100]}")
         print("   Server will continue - chat will work without persistence")
     
+    # Debug: Print Supabase configuration status
+    print(f"[CONFIG] Supabase URL configured: {settings.supabase_url is not None}")
+    print(f"[CONFIG] Supabase anon key configured: {settings.supabase_anon_key is not None}")
+    print(f"[CONFIG] Supabase service role key configured: {settings.supabase_service_role_key is not None}")
+    print(f"[CONFIG] Supabase JWT secret configured: {settings.supabase_jwt_secret is not None}")
+    if settings.supabase_service_role_key:
+        print(f"[CONFIG] Service role key starts with: {settings.supabase_service_role_key[:30]}...")
+    if settings.supabase_jwt_secret:
+        print(f"[CONFIG] JWT secret starts with: {settings.supabase_jwt_secret[:30]}...")
+    
     # TODO: Initialize other services (embeddings, etc.)
     print(f"🚀 {settings.project_name} v{settings.version} started")
 

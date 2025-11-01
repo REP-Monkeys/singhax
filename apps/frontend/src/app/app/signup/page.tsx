@@ -49,7 +49,7 @@ export default function SignUpPage() {
         <div className="text-center">
           <Link href="/">
             <h1 className="text-2xl font-semibold text-black tracking-tight hover:text-gray-700 transition-colors">
-              ConvoTravelInsure
+              TripMate
             </h1>
           </Link>
           <h2 className="mt-8 text-3xl font-bold text-black tracking-tight">
@@ -124,7 +124,8 @@ export default function SignUpPage() {
             <div>
               <Button
                 type="submit"
-                className="w-full bg-black hover:bg-gray-800 text-white font-medium py-3 rounded-full transition-colors"
+                className="w-full text-white font-medium py-3 rounded-full hover:opacity-90"
+                style={{ backgroundColor: '#dd2930' }}
                 disabled={loading}
               >
                 {loading ? 'Creating account...' : 'Create account'}

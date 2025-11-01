@@ -1,9 +1,24 @@
 """Core configuration settings for the ConvoTravelInsure backend."""
 
 import os
-from typing import List, Optional
+from pathlib import Path
+from typing import List, Optional, Union
 from pydantic_settings import BaseSettings
 from pydantic import ConfigDict, Field
+
+# Load .env file from project root
+from dotenv import load_dotenv
+
+# Get the project root (3 levels up from this file)
+project_root = Path(__file__).parent.parent.parent.parent
+env_file = project_root / ".env"
+
+# Load environment variables from .env file
+if env_file.exists():
+    load_dotenv(env_file)
+    print(f"[CONFIG] Loaded .env from: {env_file}")
+else:
+    print(f"[CONFIG] No .env file found at: {env_file}")
 
 
 class Settings(BaseSettings):
@@ -44,9 +59,6 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     
-    # CORS
-    allowed_origins: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
-    
     # External APIs
     groq_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
@@ -82,11 +94,24 @@ class Settings(BaseSettings):
     # Frontend Configuration (optional)
     next_public_api_url: Optional[str] = None
     
+    # CORS - stored as string internally, accessed as list via property
+    allowed_origins_raw: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000",
+        validation_alias="allowed_origins",
+        description="CORS allowed origins as comma-separated string"
+    )
+    
     model_config = ConfigDict(
         env_file="../../.env",  # Look in project root
         case_sensitive=False,
-        extra="ignore"  # Ignore extra fields from .env
+        extra="ignore",  # Ignore extra fields from .env
+        env_parse_none_str=None  # Parse 'None' strings as None
     )
+    
+    @property
+    def allowed_origins(self) -> List[str]:
+        """Parse comma-separated string to list."""
+        return [origin.strip() for origin in self.allowed_origins_raw.split(',') if origin.strip()]
 
 
 # Global settings instance

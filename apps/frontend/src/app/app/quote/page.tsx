@@ -4,8 +4,8 @@ import { useState, useRef, useEffect } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Mic, MicOff, Send, User, Bot, Phone, LogOut, ArrowLeft, FileText, Upload } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Mic, MicOff, Send, User, Bot, Phone, LogOut, ArrowLeft, FileText, Upload, Plane } from 'lucide-react'
 import { CopilotPanel } from '@/components/CopilotPanel'
 import { VoiceButton } from '@/components/VoiceButton'
 import { ExtractedDataCard } from '@/components/ExtractedDataCard'
@@ -96,6 +96,60 @@ export default function QuotePage() {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  // Parse plan information from message content
+  const parsePlans = (content: string) => {
+    const plans: Array<{
+      name: string
+      price: string
+      features: string[]
+      emoji: string
+    }> = []
+
+    // Match plan patterns like "🌟 **Standard Plan: $123.45 SGD**" or "⭐ **Elite Plan: $456.78 SGD**"
+    // Updated pattern to capture better
+    const planPattern = /([🌟⭐💎])\s?\*\*([^:]+):\s*\$\s*([0-9,]+\.?\d*)\s*SGD\*\*([\s\S]*?)(?=\n\n[🌟⭐💎]\s?\*\*|\n\n[A-Z💡📊]|\n\nAll prices|$)/g
+    
+    let match
+    while ((match = planPattern.exec(content)) !== null) {
+      const emoji = match[1]
+      const name = match[2].trim()
+      const price = `$${match[3]} SGD`
+      const featuresText = match[4] || ''
+      
+      // Extract features (lines starting with ✓ or *)
+      const features = featuresText
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.startsWith('✓') || (line.startsWith('*') && !line.startsWith('**')))
+        .map(line => line.replace(/^[✓*]\s*/, '').replace(/\*\*/g, '').trim())
+        .filter(line => line.length > 0 && !line.includes('All prices'))
+
+      if (features.length > 0 || name.includes('Plan')) {
+        plans.push({ name, price, features, emoji })
+      }
+    }
+
+    return plans
+  }
+
+  // Split message content into intro, plans, and outro
+  const splitMessageContent = (content: string) => {
+    const plans = parsePlans(content)
+    
+    if (plans.length === 0) {
+      return { intro: content, plans: [], outro: '' }
+    }
+
+    // Find where plans section starts and ends
+    const firstPlanIndex = content.search(/[🌟⭐💎]\s?\*\*/)
+    const outroStartIndex = content.indexOf('\n\nAll prices')
+    
+    const intro = firstPlanIndex > 0 ? content.substring(0, firstPlanIndex).trim() : ''
+    const outro = outroStartIndex > 0 ? content.substring(outroStartIndex).trim() : content.substring(content.lastIndexOf('All prices') > -1 ? content.lastIndexOf('All prices') : content.length).trim()
+    
+    return { intro, plans, outro }
+  }
 
   const loadChatHistory = async (sessionId?: string) => {
     const targetSessionId = sessionId || sessionIdParam
@@ -506,9 +560,9 @@ export default function QuotePage() {
 
   return (
     <ProtectedRoute requireOnboarding={true}>
-      <div className="min-h-screen bg-white">
+      <div className="min-h-screen" style={{ backgroundImage: 'linear-gradient(120deg, #fdfbfb 0%, #ebedee 100%)' }}>
       {/* Header */}
-      <header className="border-b border-gray-200 bg-white sticky top-0 z-50 backdrop-blur-sm bg-white/95">
+      <header className="border-b border-gray-200 bg-white sticky top-0 z-50 backdrop-blur-sm bg-white/95 shadow-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-4">
             <div className="flex items-center space-x-4">
@@ -518,7 +572,10 @@ export default function QuotePage() {
                   Dashboard
                 </Button>
               </Link>
-              <h1 className="text-xl font-semibold text-black tracking-tight">ConvoTravelInsure</h1>
+              <div className="flex items-center gap-2">
+                <Plane className="w-7 h-7" style={{ color: '#dd2930' }} />
+                <h1 className="text-2xl font-semibold tracking-tight" style={{ color: '#dd2930' }}>TripMate</h1>
+              </div>
             </div>
             <div className="flex items-center space-x-3">
               <span className="text-sm text-gray-600">Hi, {user?.name}</span>
@@ -531,7 +588,7 @@ export default function QuotePage() {
               </Button>
               <Button variant="ghost" size="sm" onClick={logout} className="text-gray-700 hover:text-black hover:bg-gray-100">
                 <LogOut className="w-4 h-4 mr-1.5" />
-                Sign out
+                Logout
               </Button>
             </div>
           </div>
@@ -545,7 +602,7 @@ export default function QuotePage() {
             <div className="border border-gray-200 rounded-2xl h-[600px] flex flex-col bg-white shadow-sm">
               <div className="border-b border-gray-200 px-6 py-4">
                 <div className="flex items-center">
-                  <div className="flex items-center justify-center h-10 w-10 rounded-full bg-black mr-3">
+                  <div className="flex items-center justify-center h-10 w-10 rounded-full mr-3" style={{ backgroundColor: '#dd2930' }}>
                     <Bot className="w-5 h-5 text-white" />
                   </div>
                   <div>
@@ -574,9 +631,10 @@ export default function QuotePage() {
                         <div
                           className={`max-w-[75%] ${
                             message.role === 'user'
-                              ? 'bg-black text-white rounded-2xl rounded-tr-sm'
+                              ? 'text-white rounded-2xl rounded-tr-sm'
                               : 'bg-gray-100 text-black rounded-2xl rounded-tl-sm'
                           } px-4 py-3`}
+                          style={message.role === 'user' ? { backgroundColor: '#dd2930' } : undefined}
                         >
                           {/* Show file attachment if present */}
                           {message.fileAttachment && (
@@ -589,9 +647,46 @@ export default function QuotePage() {
                             </div>
                           )}
                           {/* Show content only if it exists */}
-                          {message.content && (
-                            <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-                          )}
+                          {message.content && (() => {
+                            const { intro, plans, outro } = splitMessageContent(message.content)
+                            return (
+                              <div>
+                                {intro && (
+                                  <p className="text-sm leading-relaxed whitespace-pre-wrap mb-4">{intro}</p>
+                                )}
+                                {plans.length > 0 && (
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                                    {plans.map((plan, index) => (
+                                      <Card key={index} className="border border-gray-200 hover:border-gray-300 transition-colors">
+                                        <CardHeader className="pb-3">
+                                          <CardTitle className="text-lg flex items-center gap-2">
+                                            <span>{plan.emoji}</span>
+                                            <span>{plan.name}</span>
+                                          </CardTitle>
+                                          <CardDescription className="text-xl font-bold text-black mt-2">
+                                            {plan.price}
+                                          </CardDescription>
+                                        </CardHeader>
+                                        <CardContent className="pt-0">
+                                          <ul className="space-y-1.5">
+                                            {plan.features.map((feature, idx) => (
+                                              <li key={idx} className="text-xs text-gray-600 flex items-start">
+                                                <span className="text-green-600 mr-1.5">✓</span>
+                                                <span>{feature}</span>
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </CardContent>
+                                      </Card>
+                                    ))}
+                                  </div>
+                                )}
+                                {outro && (
+                                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{outro}</p>
+                                )}
+                              </div>
+                            )
+                          })()}
                           <p className={`text-xs mt-2 ${message.role === 'user' ? 'text-gray-300' : 'text-gray-500'}`}>
                             {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </p>
@@ -775,7 +870,8 @@ export default function QuotePage() {
                       onClick={handleSendMessage}
                       disabled={(!inputValue.trim() && !selectedFile) || isLoading || isUploading}
                       size="sm"
-                      className="bg-black hover:bg-gray-800 text-white rounded-full h-10 w-10 p-0"
+                      className="text-white rounded-full h-10 w-10 p-0 hover:opacity-90"
+                      style={{ backgroundColor: '#dd2930' }}
                     >
                       <Send className="w-4 h-4" />
                     </Button>
