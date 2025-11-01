@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import HTTPException, status, Depends
+from fastapi import HTTPException, status, Depends, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -32,8 +32,8 @@ def _get_encryption_key() -> bytes:
 
 _cipher = Fernet(_get_encryption_key())
 
-# JWT token scheme
-security = HTTPBearer()
+# JWT token scheme - auto_error=False allows OPTIONS requests to pass through
+security = HTTPBearer(auto_error=False)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -154,7 +154,8 @@ def get_current_user(
 
 
 def get_current_user_supabase(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
     """
@@ -171,6 +172,26 @@ def get_current_user_supabase(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+    # Allow OPTIONS requests (CORS preflight) to pass through
+    # For OPTIONS requests, we need to skip authentication
+    # CORS middleware will handle these, but dependencies are evaluated first
+    # So we return a dummy user to allow the request to proceed
+    # The actual OPTIONS response will be handled by CORS middleware
+    if request.method == "OPTIONS":
+        # Return a minimal dummy user - this won't be used since OPTIONS is handled by CORS
+        # But we need to satisfy the return type
+        import uuid
+        return User(
+            id=uuid.uuid4(),  # Dummy UUID
+            email="",
+            name="",
+            hashed_password="",
+        )
+
+    # Handle missing credentials for non-OPTIONS requests
+    if credentials is None:
+        raise credentials_exception
 
     # Verify Supabase JWT token
     payload = verify_supabase_token(credentials.credentials)

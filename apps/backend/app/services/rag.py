@@ -251,6 +251,118 @@ class RAGService:
         logger.info(f"Ingestion complete: {result}")
         return result
     
+    def ingest_document(
+        self,
+        db: Session,
+        title: str,
+        insurer_name: str,
+        product_code: str,
+        content: str,
+        split_by_sections: bool = True
+    ) -> List[RagDocument]:
+        """Ingest a text document into RAG database.
+        
+        Args:
+            db: Database session
+            title: Document title
+            insurer_name: Insurance company name
+            product_code: Product code
+            content: Full document text content
+            split_by_sections: Whether to split content by sections
+            
+        Returns:
+            List of created RagDocument objects
+        """
+        self.db = db  # Update db session
+        
+        logger.info(f"Starting ingestion of document: {title}")
+        
+        documents = []
+        
+        if split_by_sections:
+            # Extract sections using same pattern as PDF extraction
+            section_pattern = r'(?:SECTION|Section)\s+(\d+)(?:\s*[:\-–—]\s*|\s+)([^\n]+?)(?=\n|$)'
+            matches = list(re.finditer(section_pattern, content, re.IGNORECASE | re.MULTILINE))
+            
+            logger.info(f"Found {len(matches)} section headers in document")
+            
+            for i, match in enumerate(matches):
+                section_num = match.group(1)
+                section_title = match.group(2).strip()
+                
+                # Get text from this section to the next
+                start_pos = match.end()
+                end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+                section_text = content[start_pos:end_pos].strip()
+                
+                # Skip very short sections
+                if len(section_text) < 50:
+                    continue
+                
+                # Chunk the section
+                chunks = self._chunk_text(section_text, max_words=500)
+                
+                for chunk_idx, chunk_text in enumerate(chunks):
+                    try:
+                        embedding = self._generate_embedding(chunk_text)
+                    except Exception as e:
+                        logger.error(f"Failed embedding for section {section_num}: {e}")
+                        continue
+                    
+                    # Create document record
+                    doc = RagDocument(
+                        id=uuid.uuid4(),
+                        title=title,
+                        insurer_name=insurer_name,
+                        product_code=product_code,
+                        section_id=f'Section {section_num}',
+                        heading=section_title,
+                        text=chunk_text,
+                        citations={
+                            'chunk_index': chunk_idx,
+                            'total_chunks': len(chunks)
+                        },
+                        embedding=embedding
+                    )
+                    
+                    self.db.add(doc)
+                    documents.append(doc)
+        else:
+            # No section splitting, just chunk the entire content
+            chunks = self._chunk_text(content, max_words=500)
+            
+            for chunk_idx, chunk_text in enumerate(chunks):
+                try:
+                    embedding = self._generate_embedding(chunk_text)
+                except Exception as e:
+                    logger.error(f"Failed embedding for chunk {chunk_idx}: {e}")
+                    continue
+                
+                # Create document record
+                doc = RagDocument(
+                    id=uuid.uuid4(),
+                    title=title,
+                    insurer_name=insurer_name,
+                    product_code=product_code,
+                    section_id='1',
+                    heading=title,
+                    text=chunk_text,
+                    citations={
+                        'chunk_index': chunk_idx,
+                        'total_chunks': len(chunks)
+                    },
+                    embedding=embedding
+                )
+                
+                self.db.add(doc)
+                documents.append(doc)
+        
+        # Commit all documents
+        self.db.commit()
+        
+        logger.info(f"Ingestion complete: {len(documents)} documents created")
+        return documents
+    
     def search(
         self,
         query: str,

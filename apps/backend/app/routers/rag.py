@@ -7,7 +7,7 @@ from app.core.db import get_db
 from app.core.security import get_current_user_supabase as get_current_user
 from app.models.user import User
 from app.schemas.rag import RagSearchRequest, RagSearchResponse, RagIngestRequest
-from app.services.rag import RagService
+from app.services.rag import RAGService
 
 router = APIRouter(prefix="/rag", tags=["rag"])
 
@@ -23,7 +23,7 @@ async def search_documents(
 ):
     """Search policy documents."""
     
-    rag_service = RagService()
+    rag_service = RAGService()
     
     search_request = RagSearchRequest(
         query=q,
@@ -45,7 +45,7 @@ async def ingest_document(
 ):
     """Ingest a policy document."""
     
-    rag_service = RagService()
+    rag_service = RAGService()
     
     documents = rag_service.ingest_document(
         db,

@@ -146,9 +146,10 @@ export function CopilotPanel({ conversationState, sessionId }: CopilotPanelProps
 
       const data = await response.json()
 
-      // Redirect to Stripe checkout
-      console.log('💳 Redirecting to Stripe checkout:', data.checkout_url)
-      window.location.href = data.checkout_url
+      // Open Stripe checkout in a new tab
+      console.log('💳 Opening Stripe checkout in new tab:', data.checkout_url)
+      window.open(data.checkout_url, '_blank', 'noopener,noreferrer')
+      setIsProcessingPayment(false)
 
     } catch (error: any) {
       console.error('❌ Payment error:', error)
@@ -435,8 +436,6 @@ export function CopilotPanel({ conversationState, sessionId }: CopilotPanelProps
               Continue chatting to get quote
             </Button>
           ) : (
-            <Button className="w-full text-white font-medium rounded-full hover:opacity-90" style={{ backgroundColor: '#dd2930' }}>
-              Proceed to payment
             <Button
               onClick={handleProceedToPayment}
               disabled={isProcessingPayment}
