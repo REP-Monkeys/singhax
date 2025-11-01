@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from uuid import UUID
 from decimal import Decimal
 
-from app.models.quote import ProductType, QuoteStatus
+from app.models.quote import ProductType, QuoteStatus, TierType
 
 
 class QuoteBase(BaseModel):
@@ -19,6 +19,7 @@ class QuoteBase(BaseModel):
 class QuoteCreate(QuoteBase):
     """Schema for creating a quote."""
     trip_id: UUID
+    selected_tier: TierType = TierType.STANDARD  # Default to standard tier
 
 
 class QuoteUpdate(BaseModel):
@@ -38,6 +39,7 @@ class QuoteResponse(QuoteBase):
     id: UUID
     user_id: UUID
     trip_id: UUID
+    selected_tier: str  # Changed from TierType to str since DB stores lowercase string
     risk_breakdown: Optional[Dict[str, Any]] = None
     price_min: Optional[Decimal] = None
     price_max: Optional[Decimal] = None
@@ -48,6 +50,6 @@ class QuoteResponse(QuoteBase):
     insurer_ref: Optional[str] = None
     expires_at: Optional[datetime] = None
     created_at: datetime
-    
+
     class Config:
         from_attributes = True

@@ -1,0 +1,103 @@
+{
+  "session_id": "4a836908-f2b4-4c75-bcd2-5c4e4b2e42a0",
+  "document_type": "flight_confirmation",
+  "extracted_at": "2025-11-01T09:33:19.010993Z",
+  "source_filename": "Itinerary.pdf",
+  "trip_type": "return",
+  "airline": {
+    "outbound": {
+      "name": "Korean Air",
+      "code": "KE",
+      "confidence": 0.95
+    },
+    "inbound": {
+      "name": "Singapore Airlines",
+      "code": "SQ",
+      "confidence": 0.95
+    }
+  },
+  "flight_details": {
+    "departure": {
+      "date": "2025-12-28",
+      "time": "10:40",
+      "airport_code": "SIN",
+      "airport_name": "Singapore Changi Airport",
+      "confidence": 0.94
+    },
+    "return": {
+      "date": "2026-01-08",
+      "time": "12:35",
+      "airport_code": "ICN",
+      "airport_name": "Incheon International Airport",
+      "confidence": 0.94
+    },
+    "flight_numbers": {
+      "outbound": "KE648",
+      "inbound": "SQ611",
+      "confidence": 0.96
+    }
+  },
+  "destination": {
+    "country": "South Korea",
+    "city": "Seoul",
+    "airport_code": "ICN",
+    "confidence": 0.93
+  },
+  "travelers": [
+    {
+      "name": {
+        "first": "Xianyan Winston",
+        "last": "Yang",
+        "full": "Xianyan Winston Yang",
+        "confidence": 0.96
+      },
+      "ticket": {
+        "ticket_number": "180-7311968098",
+        "confidence": 0.9,
+        "class": {
+          "service_class": "Economy",
+          "code": "Q",
+          "confidence": 0.92
+        },
+        "cost": null
+      }
+    }
+  ],
+  "trip_duration": {
+    "days": 11,
+    "calculated_from_dates": true,
+    "confidence": 0.95
+  },
+  "trip_value": {
+    "total_cost": null,
+    "breakdown": []
+  },
+  "booking_reference": {
+    "pnr": "CA7OYY",
+    "booking_number": "1578942670013928",
+    "confidence": 0.94
+  },
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [
+    "airline.outbound.confidence",
+    "airline.inbound.confidence",
+    "flight_details.departure.confidence",
+    "flight_details.return.confidence",
+    "flight_details.flight_numbers.confidence",
+    "destination.confidence",
+    "travelers[0].name.confidence",
+    "travelers[0].ticket.confidence",
+    "travelers[0].ticket.class.confidence",
+    "travelers[0].name.confidence",
+    "travelers[0].ticket.confidence",
+    "travelers[0].ticket.class.confidence",
+    "trip_duration.confidence",
+    "booking_reference.confidence"
+  ],
+  "low_confidence_fields": [],
+  "missing_fields": []
+}

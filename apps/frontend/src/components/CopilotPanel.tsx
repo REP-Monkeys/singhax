@@ -42,10 +42,13 @@ interface ConversationState {
 
 interface CopilotPanelProps {
   conversationState: ConversationState
+  sessionId: string
 }
 
-export function CopilotPanel({ conversationState }: CopilotPanelProps) {
+export function CopilotPanel({ conversationState, sessionId }: CopilotPanelProps) {
   const [expandedSections, setExpandedSections] = useState<string[]>(['trip'])
+  const [selectedTier, setSelectedTier] = useState<string>('standard')
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false)
 
   const toggleSection = (section: string) => {
     setExpandedSections(prev =>
@@ -103,6 +106,56 @@ export function CopilotPanel({ conversationState }: CopilotPanelProps) {
 
   // Extract quote information
   const hasQuote = quote_data?.quotes !== undefined
+
+  // Handle payment flow
+  const handleProceedToPayment = async () => {
+    if (!hasQuote || !sessionId) {
+      console.error('Cannot proceed to payment: missing quote or session ID')
+      return
+    }
+
+    setIsProcessingPayment(true)
+
+    try {
+      // Get Supabase session for authentication
+      const { supabase } = await import('@/lib/supabase')
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+
+      if (sessionError || !session) {
+        throw new Error('You must be logged in to proceed with payment')
+      }
+
+      // Call backend to create Stripe checkout session
+      const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+      const response = await fetch(`${backendUrl}/payments/create-checkout`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          session_id: sessionId,
+          selected_tier: selectedTier
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Failed to create checkout session')
+      }
+
+      const data = await response.json()
+
+      // Redirect to Stripe checkout
+      console.log('💳 Redirecting to Stripe checkout:', data.checkout_url)
+      window.location.href = data.checkout_url
+
+    } catch (error: any) {
+      console.error('❌ Payment error:', error)
+      alert(`Payment error: ${error.message}`)
+      setIsProcessingPayment(false)
+    }
+  }
 
   // Calculate price range from available quotes
   let priceRange = { min: 0, max: 0 }
@@ -261,23 +314,71 @@ export function CopilotPanel({ conversationState }: CopilotPanelProps) {
               <p className="text-sm text-gray-400 italic">Available plans will appear here after quotes are generated...</p>
             ) : (
               <div className="space-y-3">
-                <p className="text-sm text-gray-600">Available plans:</p>
+                <p className="text-sm text-gray-600">Select a plan:</p>
                 {quote_data?.quotes?.standard && (
-                  <div className="p-3 border border-gray-200 rounded-xl hover:border-black transition-colors cursor-pointer">
-                    <p className="text-sm font-semibold text-black">Standard</p>
-                    <p className="text-xs text-gray-500 mt-1">SGD {quote_data.quotes.standard.price.toFixed(2)}</p>
+                  <div
+                    onClick={() => setSelectedTier('standard')}
+                    className={`p-3 border-2 rounded-xl transition-all cursor-pointer ${
+                      selectedTier === 'standard'
+                        ? 'border-black bg-gray-50'
+                        : 'border-gray-200 hover:border-gray-400'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-black">Standard</p>
+                        <p className="text-xs text-gray-500 mt-1">SGD {quote_data.quotes.standard.price.toFixed(2)}</p>
+                      </div>
+                      {selectedTier === 'standard' && (
+                        <div className="w-5 h-5 rounded-full bg-black flex items-center justify-center">
+                          <div className="w-2 h-2 rounded-full bg-white"></div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
                 {quote_data?.quotes?.elite && (
-                  <div className="p-3 border border-gray-200 rounded-xl hover:border-black transition-colors cursor-pointer">
-                    <p className="text-sm font-semibold text-black">Elite</p>
-                    <p className="text-xs text-gray-500 mt-1">SGD {quote_data.quotes.elite.price.toFixed(2)}</p>
+                  <div
+                    onClick={() => setSelectedTier('elite')}
+                    className={`p-3 border-2 rounded-xl transition-all cursor-pointer ${
+                      selectedTier === 'elite'
+                        ? 'border-black bg-gray-50'
+                        : 'border-gray-200 hover:border-gray-400'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-black">Elite</p>
+                        <p className="text-xs text-gray-500 mt-1">SGD {quote_data.quotes.elite.price.toFixed(2)}</p>
+                      </div>
+                      {selectedTier === 'elite' && (
+                        <div className="w-5 h-5 rounded-full bg-black flex items-center justify-center">
+                          <div className="w-2 h-2 rounded-full bg-white"></div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
                 {quote_data?.quotes?.premier && (
-                  <div className="p-3 border border-gray-200 rounded-xl hover:border-black transition-colors cursor-pointer">
-                    <p className="text-sm font-semibold text-black">Premier</p>
-                    <p className="text-xs text-gray-500 mt-1">SGD {quote_data.quotes.premier.price.toFixed(2)}</p>
+                  <div
+                    onClick={() => setSelectedTier('premier')}
+                    className={`p-3 border-2 rounded-xl transition-all cursor-pointer ${
+                      selectedTier === 'premier'
+                        ? 'border-black bg-gray-50'
+                        : 'border-gray-200 hover:border-gray-400'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-black">Premier</p>
+                        <p className="text-xs text-gray-500 mt-1">SGD {quote_data.quotes.premier.price.toFixed(2)}</p>
+                      </div>
+                      {selectedTier === 'premier' && (
+                        <div className="w-5 h-5 rounded-full bg-black flex items-center justify-center">
+                          <div className="w-2 h-2 rounded-full bg-white"></div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -336,6 +437,12 @@ export function CopilotPanel({ conversationState }: CopilotPanelProps) {
           ) : (
             <Button className="w-full text-white font-medium rounded-full hover:opacity-90" style={{ backgroundColor: '#dd2930' }}>
               Proceed to payment
+            <Button
+              onClick={handleProceedToPayment}
+              disabled={isProcessingPayment}
+              className="w-full bg-black hover:bg-gray-800 text-white font-medium rounded-full"
+            >
+              {isProcessingPayment ? 'Processing...' : `Proceed to payment (${selectedTier.charAt(0).toUpperCase() + selectedTier.slice(1)})`}
             </Button>
           )}
 

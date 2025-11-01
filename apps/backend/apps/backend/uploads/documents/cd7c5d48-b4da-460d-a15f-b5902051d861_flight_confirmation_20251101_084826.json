@@ -1,0 +1,16 @@
+{
+  "session_id": "cd7c5d48-b4da-460d-a15f-b5902051d861",
+  "document_type": "unknown",
+  "extracted_at": "2025-11-01T08:48:26.030712Z",
+  "source_filename": "Itinerary.pdf",
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "ocr_text_preview": "",
+  "high_confidence_fields": [],
+  "low_confidence_fields": [],
+  "missing_fields": [],
+  "error": "Could not determine document type"
+}

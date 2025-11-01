@@ -6,12 +6,97 @@ from sqlalchemy.orm import Session
 from pathlib import Path
 
 from app.services.pricing import PricingService
-from app.services.rag import RagService
+from app.services.rag import RAGService
 from app.services.claims import ClaimsService
 from app.services.handoff import HandoffService
 from app.services.payment import PaymentService
 from app.services.claims_intelligence import ClaimsIntelligenceService, ClaimsAnalyzer, NarrativeGenerator
 from app.services.ocr import OCRService
+
+
+def get_user_policy_context(user_id: str, db: Session) -> Dict[str, Any]:
+    """Get user's policy/tier context from database.
+    
+    Checks for active policy first, then falls back to recent quote.
+    
+    Args:
+        user_id: User UUID string
+        db: Database session
+        
+    Returns:
+        Dictionary with policy/tier context:
+        {
+            "has_policy": bool,
+            "tier": "standard"|"elite"|"premier",
+            "policy_number": "870000001-XXX" (if has_policy),
+            "coverage": {...},
+            "effective_date": date,
+            "expiry_date": date,
+            "destination": "Japan",
+            "travelers": [{...}],
+            "age": 35
+        }
+    """
+    import logging
+    from app.models.policy import Policy, PolicyStatus
+    from app.models.quote import Quote
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except (ValueError, AttributeError):
+        logger.error(f"Invalid user_id format: {user_id}")
+        return {"has_policy": False, "error": "Invalid user ID"}
+    
+    # Try to find active policy
+    policy = db.query(Policy).filter(
+        Policy.user_id == user_uuid,
+        Policy.status == PolicyStatus.ACTIVE
+    ).order_by(Policy.created_at.desc()).first()
+    
+    if policy:
+        quote = policy.quote
+        trip = quote.trip if quote else None
+        travelers = quote.travelers if quote else []
+        primary_age = travelers[0]['age'] if travelers else None
+        
+        return {
+            "has_policy": True,
+            "tier": quote.selected_tier if quote else "unknown",
+            "policy_number": policy.policy_number,
+            "coverage": policy.coverage or {},
+            "effective_date": policy.effective_date,
+            "expiry_date": policy.expiry_date,
+            "destination": trip.destinations[0] if (trip and trip.destinations) else "unknown",
+            "travelers": travelers,
+            "age": primary_age
+        }
+    
+    # No active policy - check for recent quote (user might be in quote flow)
+    quote = db.query(Quote).filter(
+        Quote.user_id == user_uuid
+    ).order_by(Quote.created_at.desc()).first()
+    
+    if quote:
+        trip = quote.trip
+        travelers = quote.travelers or []
+        primary_age = travelers[0]['age'] if travelers else None
+        
+        return {
+            "has_policy": False,
+            "tier": quote.selected_tier,
+            "coverage": quote.breakdown.get("coverage", {}) if quote.breakdown else {},
+            "destination": trip.destinations[0] if (trip and trip.destinations) else "unknown",
+            "travelers": travelers,
+            "age": primary_age
+        }
+    
+    # No policy or quote found
+    return {
+        "has_policy": False,
+        "tier": None
+    }
 
 
 class ConversationTools:
@@ -20,7 +105,7 @@ class ConversationTools:
     def __init__(self, db: Session, llm_client=None):
         self.db = db
         self.pricing_service = PricingService()
-        self.rag_service = RagService()
+        self.rag_service = RAGService(db=db)
         self.claims_service = ClaimsService()
         self.handoff_service = HandoffService()
         self.payment_service = PaymentService()
@@ -249,15 +334,23 @@ class ConversationTools:
         """
         Create a Policy record after successful payment.
         
+        Now integrates with Ancileo Purchase API to issue real policies.
+        
         Args:
             payment_intent_id: Payment intent ID
             
         Returns:
             Dict with success, policy_number, and policy_id
         """
+        import logging
+        from datetime import datetime, timedelta
         from app.models.payment import Payment, PaymentStatus
         from app.models.quote import Quote, QuoteStatus
         from app.models.policy import Policy, PolicyStatus
+        from app.adapters.insurer.ancileo_adapter import AncileoAdapter
+        from app.adapters.insurer.ancileo_client import AncileoQuoteExpiredError, AncileoAPIError
+        
+        logger = logging.getLogger(__name__)
         
         # Query Payment record
         payment = self.db.query(Payment).filter(
@@ -306,39 +399,152 @@ class ConversationTools:
                 "error": "Trip dates not available"
             }
         
-        # Extract coverage from quote breakdown
-        # quote.breakdown should contain coverage details
-        coverage = quote.breakdown or {}
+        # Try to get Ancileo reference from quote
+        ancileo_ref = quote.get_ancileo_ref()
         
-        # If breakdown doesn't have coverage, extract from quote data structure
-        # This might need adjustment based on actual quote structure
-        if "coverage" not in coverage and isinstance(quote.breakdown, dict):
-            # Try to extract from breakdown structure
-            coverage = {
-                "medical_coverage": coverage.get("medical_coverage", 50000),
-                "trip_cancellation": coverage.get("trip_cancellation", 5000),
-                "baggage_loss": coverage.get("baggage_loss", 3000),
-                "personal_accident": coverage.get("personal_accident", 100000),
-            }
-        elif not coverage:
-            # Default coverage if breakdown is missing
-            coverage = {
-                "medical_coverage": 50000,
-                "trip_cancellation": 5000,
-                "baggage_loss": 3000,
-                "personal_accident": 100000,
-            }
+        # Get traveler details from quote breakdown (if collected)
+        traveler_details = None
+        selected_tier = "elite"  # Default tier
         
-        # Extract travelers for named_insureds
-        # quote.travelers is JSONB field
+        if quote.breakdown and isinstance(quote.breakdown, dict):
+            traveler_details = quote.breakdown.get("traveler_details")
+            selected_tier = quote.breakdown.get("selected_tier", "elite")
+        
+        # Attempt to use Ancileo Purchase API if we have ancileo_ref
+        if ancileo_ref:
+            try:
+                logger.info(f"Attempting Ancileo Purchase API for payment {payment_intent_id}")
+                
+                # Validate quote hasn't expired (24 hours)
+                quote_age_hours = (datetime.utcnow() - quote.created_at.replace(tzinfo=None)).total_seconds() / 3600
+                if quote_age_hours > 24:
+                    logger.warning(f"Quote is {quote_age_hours:.1f} hours old, may be expired")
+                    # Continue anyway - Ancileo will reject if truly expired
+                
+                # Get user info
+                from app.models.user import User
+                user = self.db.query(User).filter(User.id == payment.user_id).first()
+                
+                if not user:
+                    logger.error(f"User not found for payment {payment_intent_id}")
+                    raise ValueError("User not found")
+                
+                # Create minimal traveler details from logged-in user
+                # Per empirical testing: only firstName, lastName, email, id required
+                # Split name into firstName and lastName (handle cases with/without space)
+                name_parts = (user.name or "Guest Traveler").split(' ', 1)
+                first_name = name_parts[0]
+                last_name = name_parts[1] if len(name_parts) > 1 else ""
+                
+                minimal_traveler = {
+                    "id": "1",
+                    "firstName": first_name,
+                    "lastName": last_name or ".",  # Ancileo might require non-empty lastName
+                    "email": user.email
+                }
+                
+                logger.info(f"Using minimal traveler data from user account: {user.email}")
+                
+                # Check if complex traveler details were collected (optional enhancement)
+                if traveler_details and traveler_details.get("insureds"):
+                    # Use the collected data if available
+                    insureds = traveler_details.get("insureds", [])
+                    main_contact = traveler_details.get("main_contact", minimal_traveler)
+                    logger.info(f"Using collected traveler details ({len(insureds)} traveler(s))")
+                else:
+                    # Use minimal data from user account
+                    insureds = [minimal_traveler]
+                    main_contact = minimal_traveler
+                    logger.info("Using minimal traveler data from user account")
+                
+                # Initialize adapter
+                adapter = AncileoAdapter()
+                
+                # Call Ancileo Purchase API
+                bind_result = adapter.bind_policy({
+                    "ancileo_reference": ancileo_ref,
+                    "selected_tier": selected_tier,
+                    "insureds": insureds,
+                    "main_contact": main_contact
+                })
+                
+                # Extract policy details from Ancileo response
+                policy_number = bind_result.get("policy_number")
+                coverage = bind_result.get("coverage", {})
+                named_insureds = bind_result.get("named_insureds", [])
+                
+                logger.info(f"Successfully created Ancileo policy: {policy_number}")
+                
+                # Create Policy record with Ancileo data
+                policy = Policy(
+                    user_id=payment.user_id,
+                    quote_id=quote.id,
+                    policy_number=policy_number,
+                    coverage=coverage,
+                    named_insureds=named_insureds,
+                    effective_date=trip.start_date,
+                    expiry_date=trip.end_date,
+                    status=PolicyStatus.ACTIVE,
+                    cooling_off_days=14
+                )
+                
+                self.db.add(policy)
+                self.db.commit()
+                self.db.refresh(policy)
+                
+                return {
+                    "success": True,
+                    "policy_number": policy_number,
+                    "policy_id": str(policy.id),
+                    "source": "ancileo_api"
+                }
+                    
+            except AncileoQuoteExpiredError:
+                logger.error(f"Ancileo quote expired for payment {payment_intent_id}")
+                return {
+                    "success": False,
+                    "error": "Quote has expired. Please generate a new quote."
+                }
+            except AncileoAPIError as e:
+                logger.error(f"Ancileo API error: {e}")
+                # Fall through to mock policy creation
+                logger.warning("Falling back to mock policy due to Ancileo API error")
+            except Exception as e:
+                logger.error(f"Unexpected error calling Ancileo Purchase API: {e}", exc_info=True)
+                # Fall through to mock policy creation
+                logger.warning("Falling back to mock policy due to unexpected error")
+        else:
+            logger.warning(f"No Ancileo reference found for quote {quote.id}")
+            logger.info("Creating mock policy (Ancileo Purchase API not available)")
+        
+        # Fallback: Create mock policy (for compatibility until traveler collection is implemented)
+        coverage = quote.breakdown.get("coverage", {}) if quote.breakdown else {}
+        
+        if not coverage:
+            # Default coverage based on tier
+            tier_coverage = {
+                "standard": {
+                    "medical_coverage": 250000,
+                    "trip_cancellation": 5000,
+                    "baggage_loss": 3000,
+                },
+                "elite": {
+                    "medical_coverage": 500000,
+                    "trip_cancellation": 12500,
+                    "baggage_loss": 5000,
+                },
+                "premier": {
+                    "medical_coverage": 1000000,
+                    "trip_cancellation": 15000,
+                    "baggage_loss": 7500,
+                }
+            }
+            coverage = tier_coverage.get(selected_tier, tier_coverage["elite"])
+        
         named_insureds = quote.travelers if quote.travelers else []
         
-        # Generate policy number (format: POL-{8 hex chars})
-        policy_number = f"POL-{uuid.uuid4().hex[:8].upper()}"
-        
-        # Update Quote status to ACCEPTED (or equivalent)
-        # Note: QuoteStatus doesn't have ACCEPTED, we'll use a different approach
-        # For now, we'll just create the policy
+        # Generate mock policy number
+        policy_number = f"MOCK-{uuid.uuid4().hex[:8].upper()}"
         
         # Create Policy record
         policy = Policy(
@@ -354,18 +560,14 @@ class ConversationTools:
         )
         
         self.db.add(policy)
-        
-        # Update quote status if we want to mark it as accepted
-        # Since QuoteStatus doesn't have ACCEPTED, we could add it or use another approach
-        # For now, we'll commit the policy and let the quote status remain as is
-        
         self.db.commit()
         self.db.refresh(policy)
         
         return {
             "success": True,
             "policy_number": policy_number,
-            "policy_id": str(policy.id)
+            "policy_id": str(policy.id),
+            "source": "mock"  # Indicates this is a mock policy
         }
     
     def analyze_destination_risk(
@@ -502,7 +704,6 @@ class ConversationTools:
                 "error": str(e),
                 "activity": activity
             }
-    
     def extract_text_from_image(
         self,
         image_path: str,

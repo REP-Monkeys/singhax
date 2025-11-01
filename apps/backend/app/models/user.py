@@ -57,6 +57,10 @@ class User(Base):
     payments = relationship("Payment", back_populates="user")
     chat_history = relationship("ChatHistory", back_populates="user")
     audit_logs = relationship("AuditLog", back_populates="user")
+    flights = relationship("Flight", back_populates="user", cascade="all, delete-orphan")
+    hotels = relationship("Hotel", back_populates="user", cascade="all, delete-orphan")
+    visas = relationship("Visa", back_populates="user", cascade="all, delete-orphan")
+    itineraries = relationship("Itinerary", back_populates="user", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<User(id={self.id}, email={self.email}, name={self.name})>"

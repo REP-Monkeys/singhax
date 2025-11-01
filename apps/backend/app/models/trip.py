@@ -25,6 +25,7 @@ class Trip(Base):
     flight_refs = Column(JSONB, default=list)  # Flight booking references
     accommodation_refs = Column(JSONB, default=list)  # Hotel/booking references
     total_cost = Column(String, nullable=True)  # Trip cost estimate
+    metadata_json = Column(JSONB, nullable=True)  # Session data, chat history references, document file references
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

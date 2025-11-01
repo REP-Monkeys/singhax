@@ -1,24 +1,45 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Check, X, Edit2 } from 'lucide-react'
+import { Input } from '@/components/ui/input'
+import { Check, X, Edit2, Save } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
 
 interface ExtractedDataCardProps {
   extractedData: any
+  documentId?: string  // Document ID for updating
   onConfirm: () => void
   onEdit: () => void
   onReject: () => void
+  onSave?: (updatedData: any) => void  // Callback after successful save
 }
 
 export function ExtractedDataCard({
   extractedData,
+  documentId,
   onConfirm,
   onEdit,
-  onReject
+  onReject,
+  onSave
 }: ExtractedDataCardProps) {
   const [isEditing, setIsEditing] = useState(false)
+  const [editedData, setEditedData] = useState<any>(null)
+  const [isSaving, setIsSaving] = useState(false)
+  
+  // Get auth token helper function
+  const getAuthToken = async (): Promise<string | null> => {
+    const { data: { session } } = await supabase.auth.getSession()
+    return session?.access_token || null
+  }
+  
+  // Initialize edited data when entering edit mode
+  useEffect(() => {
+    if (isEditing && extractedData) {
+      setEditedData(JSON.parse(JSON.stringify(extractedData)))  // Deep copy
+    }
+  }, [isEditing, extractedData])
 
   if (!extractedData) return null
 
@@ -28,64 +49,171 @@ export function ExtractedDataCard({
     .map((word: string) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ')
 
-  // Extract key information for display
-  const displayData: { label: string; value: any }[] = []
+  // Helper function to build display data from extracted data
+  const buildDisplayData = (data: any): { label: string; value: any; path: string[] }[] => {
+    const displayData: { label: string; value: any; path: string[] }[] = []
 
-  // Flight confirmation data
-  if (extractedData.destination) {
-    const dest = extractedData.destination
-    displayData.push({
-      label: 'Destination',
-      value: `${dest.city || ''}${dest.city && dest.country ? ', ' : ''}${dest.country || ''}`.trim() || dest.value
-    })
+    // Flight confirmation data
+    if (data.destination) {
+      const dest = data.destination
+      const value = `${dest.city || ''}${dest.city && dest.country ? ', ' : ''}${dest.country || ''}`.trim() || dest.value
+      displayData.push({
+        label: 'Destination',
+        value: value,
+        path: ['destination', 'country']  // Path for editing
+      })
+    }
+
+    if (data.flight_details) {
+      const fd = data.flight_details
+      if (fd.departure?.date) {
+        displayData.push({ 
+          label: 'Departure Date', 
+          value: fd.departure.date,
+          path: ['flight_details', 'departure', 'date']
+        })
+      }
+      if (fd.return?.date) {
+        displayData.push({ 
+          label: 'Return Date', 
+          value: fd.return.date,
+          path: ['flight_details', 'return', 'date']
+        })
+      }
+    }
+
+    // Trip details (from normalized structure)
+    if (data.trip_details) {
+      const td = data.trip_details
+      if (td.departure_date?.value) {
+        displayData.push({ 
+          label: 'Departure Date', 
+          value: td.departure_date.value,
+          path: ['trip_details', 'departure_date', 'value']
+        })
+      }
+      if (td.return_date?.value) {
+        displayData.push({ 
+          label: 'Return Date', 
+          value: td.return_date.value,
+          path: ['trip_details', 'return_date', 'value']
+        })
+      }
+      if (td.destination?.country) {
+        displayData.push({ 
+          label: 'Destination', 
+          value: td.destination.country,
+          path: ['trip_details', 'destination', 'country']
+        })
+      }
+    }
+
+    // Travelers
+    if (data.travelers && Array.isArray(data.travelers)) {
+      const travelerNames = data.travelers
+        .map((t: any) => t.name?.full || `${t.name?.first || ''} ${t.name?.last || ''}`.trim())
+        .filter((n: string) => n)
+      if (travelerNames.length > 0) {
+        displayData.push({ 
+          label: 'Travelers', 
+          value: travelerNames.join(', '),
+          path: ['travelers']  // Complex structure, simplified editing
+        })
+      }
+    }
+
+    // Trip duration
+    if (data.trip_duration?.days) {
+      displayData.push({ 
+        label: 'Duration', 
+        value: `${data.trip_duration.days} days`,
+        path: ['trip_duration', 'days']
+      })
+    }
+
+    // Trip value
+    if (data.trip_value?.total_cost?.amount) {
+      const cost = data.trip_value.total_cost
+      displayData.push({
+        label: 'Trip Value',
+        value: `${cost.currency || 'SGD'} ${cost.amount.toFixed(2)}`,
+        path: ['trip_value', 'total_cost', 'amount']
+      })
+    }
+
+    return displayData
   }
 
-  if (extractedData.flight_details) {
-    const fd = extractedData.flight_details
-    if (fd.departure?.date) {
-      displayData.push({ label: 'Departure Date', value: fd.departure.date })
+  const displayData = buildDisplayData(isEditing && editedData ? editedData : extractedData)
+
+  // Helper function to update nested value in edited data
+  const updateValue = (path: string[], newValue: any) => {
+    if (!editedData) return
+    
+    const newData = JSON.parse(JSON.stringify(editedData))  // Deep copy
+    let current: any = newData
+    
+    // Navigate to the parent of the target field
+    for (let i = 0; i < path.length - 1; i++) {
+      if (!current[path[i]]) {
+        current[path[i]] = {}
+      }
+      current = current[path[i]]
     }
-    if (fd.return?.date) {
-      displayData.push({ label: 'Return Date', value: fd.return.date })
-    }
+    
+    // Set the value
+    current[path[path.length - 1]] = newValue
+    setEditedData(newData)
   }
 
-  // Trip details (from normalized structure)
-  if (extractedData.trip_details) {
-    const td = extractedData.trip_details
-    if (td.departure_date?.value) {
-      displayData.push({ label: 'Departure Date', value: td.departure_date.value })
+  // Save handler
+  const handleSave = async () => {
+    if (!documentId || !editedData) {
+      console.error('Cannot save: missing documentId or editedData')
+      return
     }
-    if (td.return_date?.value) {
-      displayData.push({ label: 'Return Date', value: td.return_date.value })
-    }
-    if (td.destination?.country) {
-      displayData.push({ label: 'Destination', value: td.destination.country })
-    }
-  }
 
-  // Travelers
-  if (extractedData.travelers && Array.isArray(extractedData.travelers)) {
-    const travelerNames = extractedData.travelers
-      .map((t: any) => t.name?.full || `${t.name?.first || ''} ${t.name?.last || ''}`.trim())
-      .filter((n: string) => n)
-    if (travelerNames.length > 0) {
-      displayData.push({ label: 'Travelers', value: travelerNames.join(', ') })
+    setIsSaving(true)
+    try {
+      const token = await getAuthToken()
+      if (!token) {
+        console.error('No auth token available')
+        setIsSaving(false)
+        return
+      }
+
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+      const response = await fetch(`${API_URL}/documents/${documentId}/extracted-data`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          extracted_data: editedData
+        })
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || 'Failed to save document')
+      }
+
+      const result = await response.json()
+      
+      // Update extractedData with saved data
+      if (onSave) {
+        onSave(result.extracted_data)
+      }
+      
+      setIsEditing(false)
+      alert('Document updated successfully!')
+    } catch (error: any) {
+      console.error('Save error:', error)
+      alert(`Failed to save: ${error.message}`)
+    } finally {
+      setIsSaving(false)
     }
-  }
-
-  // Trip duration
-  if (extractedData.trip_duration?.days) {
-    displayData.push({ label: 'Duration', value: `${extractedData.trip_duration.days} days` })
-  }
-
-  // Trip value
-  if (extractedData.trip_value?.total_cost?.amount) {
-    const cost = extractedData.trip_value.total_cost
-    displayData.push({
-      label: 'Trip Value',
-      value: `${cost.currency || 'SGD'} ${cost.amount.toFixed(2)}`
-    })
   }
 
   return (
@@ -111,9 +239,18 @@ export function ExtractedDataCard({
         <div className="space-y-3">
           {displayData.length > 0 ? (
             displayData.map((item, idx) => (
-              <div key={idx} className="flex justify-between items-start">
-                <span className="font-medium text-gray-700 text-sm">{item.label}:</span>
-                <span className="text-gray-900 text-sm text-right">{String(item.value || 'N/A')}</span>
+              <div key={idx} className="flex justify-between items-start gap-2">
+                <span className="font-medium text-gray-700 text-sm flex-shrink-0">{item.label}:</span>
+                {isEditing && editedData ? (
+                  <Input
+                    value={String(item.value || '')}
+                    onChange={(e) => updateValue(item.path, e.target.value)}
+                    className="text-sm flex-1 max-w-[200px]"
+                    placeholder={item.label}
+                  />
+                ) : (
+                  <span className="text-gray-900 text-sm text-right">{String(item.value || 'N/A')}</span>
+                )}
               </div>
             ))
           ) : (
@@ -152,7 +289,7 @@ export function ExtractedDataCard({
                 Confirm
               </Button>
               <Button
-                onClick={onEdit}
+                onClick={() => setIsEditing(true)}
                 variant="outline"
                 className="flex-1"
                 size="sm"
@@ -174,17 +311,34 @@ export function ExtractedDataCard({
 
           {isEditing && (
             <div className="mt-4 pt-3 border-t border-gray-300">
-              <p className="text-sm text-gray-700 mb-2">
-                You can edit the information by typing corrections in the chat.
-              </p>
-              <Button
-                onClick={() => setIsEditing(false)}
-                variant="outline"
-                size="sm"
-                className="w-full"
-              >
-                Done Editing
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleSave}
+                  disabled={isSaving || !documentId}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                  size="sm"
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  {isSaving ? 'Saving...' : 'Save'}
+                </Button>
+                <Button
+                  onClick={() => {
+                    setIsEditing(false)
+                    setEditedData(null)
+                  }}
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  disabled={isSaving}
+                >
+                  Cancel
+                </Button>
+              </div>
+              {!documentId && (
+                <p className="text-xs text-amber-600 mt-2">
+                  ⚠️ Document ID not available. Editing may not work properly.
+                </p>
+              )}
             </div>
           )}
         </div>

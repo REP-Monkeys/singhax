@@ -15,7 +15,16 @@
       "Bash(npm run build:*)",
       "Bash(docker-compose ps:*)",
       "Bash(lsof:*)",
-      "Bash(kill:*)"
+      "Bash(kill:*)",
+      "Bash(python3:*)",
+      "Bash(psql:*)",
+      "Bash(xargs cat:*)",
+      "Bash(alembic revision:*)",
+      "Bash(docker-compose exec:*)",
+      "Bash(source:*)",
+      "Bash(alembic upgrade:*)",
+      "Bash(alembic downgrade:*)",
+      "Bash(alembic current:*)"
     ],
     "deny": [],
     "ask": []

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import uuid
 import asyncio
 from datetime import datetime
@@ -121,32 +121,13 @@ async def send_message(
         print(f"\n💬 Processing message for session {request.session_id[:8]}...")
         print(f"   User message: '{request.message[:80]}...'")
 
-        # Load existing state from checkpointer to preserve conversation context
-        try:
-            existing_state = graph.get_state(config)
-        except Exception as e:
-            print(f"   ⚠️  Could not load existing state: {e}")
-            existing_state = None
-
-        if existing_state and existing_state.values and existing_state.values.get("messages"):
-            # Continuing existing conversation - append new message to existing state
-            print(f"   📂 Loaded existing state with {len(existing_state.values.get('messages', []))} messages")
-            # Get the messages list and append new message
-            existing_messages = list(existing_state.values.get("messages", []))
-            existing_messages.append(HumanMessage(content=request.message))
-
-            # Create input with updated messages
-            current_state = {"messages": existing_messages}
-        else:
-            # New conversation - initialize state
-            print(f"   🆕 Starting new conversation")
-            current_state = {
-                "messages": [HumanMessage(content=request.message)],
-                "user_id": str(current_user.id),
-                "session_id": request.session_id,
-            }
-
-        # Invoke graph with messages - graph will handle merging with checkpoint state
+        # LangGraph's checkpointer handles state loading automatically
+        # Just pass the new message and essential metadata
+        current_state = {
+            "messages": [HumanMessage(content=request.message)],
+            "user_id": str(current_user.id),
+            "session_id": request.session_id,
+        }
         # Run in thread pool executor to prevent blocking the async event loop
         result = await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(
@@ -325,6 +306,7 @@ async def get_session_state(
 async def upload_image(
     session_id: str = Form(...),
     file: UploadFile = File(...),
+    user_message: Optional[str] = Form(None),  # Optional user message context
     current_user: User = Depends(get_current_user_supabase),
     db: Session = Depends(get_db)
 ) -> ImageUploadResponse:
@@ -384,47 +366,139 @@ async def upload_image(
         
         # Step 2: Extract structured JSON data
         print(f"📄 Extracting structured data from document...")
-        extracted_json = json_extractor.extract(
-            ocr_text=ocr_text,
-            session_id=session_id,
-            filename=file.filename or "uploaded_file"
+        if user_message:
+            print(f"📝 User message context: {user_message}")
+        
+        try:
+            extracted_json = json_extractor.extract(
+                ocr_text=ocr_text,
+                session_id=session_id,
+                filename=file.filename or "uploaded_file",
+                user_message=user_message  # Pass user message as context
+            )
+        except Exception as e:
+            print(f"❌ JSON extraction failed: {e}")
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to extract document data: {str(e)}"
+            )
+        
+        # Check for extraction errors
+        if extracted_json.get("error"):
+            error_msg = extracted_json.get("error", "Unknown error")
+            print(f"⚠️  Extraction returned error: {error_msg}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Document extraction failed: {error_msg}"
+            )
+        
+        # Safety check: Ensure extracted_json is a dict, not a list
+        if isinstance(extracted_json, list):
+            print(f"⚠️  Warning: extracted_json is a list, attempting to extract first element")
+            if len(extracted_json) > 0 and isinstance(extracted_json[0], dict):
+                extracted_json = extracted_json[0]
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to extract document data: Invalid response format"
+                )
+        elif not isinstance(extracted_json, dict):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to extract document data: Unexpected type {type(extracted_json)}"
+            )
+        
+        # Step 3: Check document type and reject if unknown
+        document_type = extracted_json.get("document_type")
+        if document_type == "unknown":
+            raise HTTPException(
+                status_code=400,
+                detail="Sorry, I can only process travel-related documents. Please upload a flight confirmation, hotel booking, itinerary, or visa application."
+            )
+        
+        # Step 4: Store document file permanently and save to database
+        print(f"\n{'='*70}")
+        print(f"📤 STORING DOCUMENT")
+        print(f"{'='*70}")
+        print(f"👤 User ID: {current_user.id}")
+        print(f"💬 Session ID: {session_id}")
+        print(f"📄 Document Type: {document_type}")
+        print(f"📝 Filename: {file.filename}")
+        print(f"📦 File Size: {len(file_bytes)} bytes")
+        print(f"{'='*70}\n")
+        
+        from app.services.document_storage import DocumentStorageService
+        storage_service = DocumentStorageService()
+        
+        # Store file permanently
+        print(f"💾 Storing file...")
+        file_storage_info = storage_service.store_document_file(
+            user_id=str(current_user.id),
+            document_type=document_type,
+            file_bytes=file_bytes,
+            original_filename=file.filename or "uploaded_file",
+            content_type=file.content_type or "application/pdf"
         )
+        print(f"✅ File stored successfully")
+        print(f"   Storage Type: {file_storage_info.get('storage_type', 'unknown')}")
+        print(f"   File Path: {file_storage_info.get('file_path', 'N/A')}")
         
-        # Generate image ID
+        # Store extracted data in database
+        print(f"\n💾 Storing document data in database...")
+        storage_result = storage_service.store_extracted_document(
+            db=db,
+            user_id=str(current_user.id),
+            session_id=session_id,
+            extracted_json=extracted_json,
+            file_storage_info=file_storage_info,
+            json_file_path=extracted_json.get("json_file_path")
+        )
+        print(f"✅ Document data stored successfully")
+        print(f"   Document ID: {storage_result.get('id', 'N/A')}")
+        print(f"   Document Type: {storage_result.get('type', 'N/A')}")
+        
+        # Final summary
+        print(f"\n{'='*70}")
+        print(f"✅ DOCUMENT UPLOAD COMPLETE")
+        print(f"{'='*70}")
+        print(f"📄 Document ID: {storage_result.get('id', 'N/A')}")
+        print(f"📋 Document Type: {storage_result.get('type', 'N/A')}")
+        print(f"💬 Session ID: {session_id}")
+        print(f"👤 User ID: {current_user.id}")
+        print(f"📁 File stored at: {file_storage_info.get('file_path', 'N/A')}")
+        print(f"💾 Database record created: ✅")
+        
+        # Check trip connection
+        from app.models.trip import Trip
+        trip = db.query(Trip).filter(Trip.session_id == session_id).first()
+        if trip:
+            print(f"🔗 Connected to Trip: ✅")
+            print(f"   Trip ID: {trip.id}")
+            print(f"   Trip Status: {trip.status}")
+        else:
+            print(f"🔗 Connected to Trip: ⚠️  No trip found for this session")
+        print(f"{'='*70}\n")
+        
+        # Generate image ID for response (keeping for compatibility)
         image_id = f"img_{uuid.uuid4().hex[:12]}"
-        
-        # Save file temporarily
-        uploads_dir = Path("apps/backend/uploads/temp")
-        uploads_dir.mkdir(parents=True, exist_ok=True)
-        file_path = uploads_dir / f"{image_id}{file_ext}"
-        
-        with open(file_path, "wb") as f:
-            f.write(file_bytes)
-        
-        # Step 3: Auto-process document via graph
-        graph_result = None
-        agent_message = None
-        
-        if ocr_text and extracted_json.get("document_type") != "unknown":
+
+        # Step 5: Store document data in graph state WITHOUT invoking the graph
+        # The graph will only be invoked when the user sends "Yes, confirm" message
+        if ocr_text:
             try:
                 graph = get_conversation_graph(db)
                 config = {"configurable": {"thread_id": session_id}}
-                
-                # Create message indicating document upload (like ChatGPT - no raw OCR text shown)
-                # The structured JSON is stored in state and processed by the graph
-                import json
-                ocr_message = f"[User uploaded a document: {file.filename}]"
-                
+
                 # Load existing state
                 try:
                     existing_state = graph.get_state(config)
-                    existing_messages = list(existing_state.values.get("messages", [])) if existing_state else []
                     state_values = existing_state.values if existing_state else {}
                 except:
-                    existing_messages = []
                     state_values = {}
-                
-                # Store extracted JSON in state for processing (not in message content)
+
+                # Store extracted JSON in state for later processing
                 if "document_data" not in state_values:
                     state_values["document_data"] = []
                 state_values["document_data"].append({
@@ -433,37 +507,21 @@ async def upload_image(
                     "document_type": extracted_json.get("document_type"),
                     "uploaded_at": datetime.now().isoformat()
                 })
-                
-                # Add simple document upload message (like ChatGPT)
-                existing_messages.append(HumanMessage(content=ocr_message))
-                
-                # Invoke graph to auto-process with structured JSON in state
-                current_state = {
-                    "messages": existing_messages,
-                    "document_data": state_values.get("document_data", []),
-                    "uploaded_filename": file.filename
-                }
-                graph_result = graph.invoke(current_state, config)
-                
-                # Extract agent response
-                if graph_result.get("messages"):
-                    for msg in reversed(graph_result.get("messages", [])):
-                        if isinstance(msg, AIMessage):
-                            agent_message = msg.content
-                            break
-                
-                print(f"✅ Document processed by agent")
-                
+
+                # Update state WITHOUT invoking the graph (no questions asked yet)
+                # Use graph.update_state to store document_data without triggering execution
+                graph.update_state(config, {"document_data": state_values["document_data"]})
+
+                print(f"✅ Document data stored in state (not processed yet - waiting for user confirmation)")
+
             except Exception as e:
-                print(f"⚠️  Could not auto-process document: {e}")
+                print(f"⚠️  Could not store document data: {e}")
                 import traceback
                 traceback.print_exc()
-        
-        # Prepare response
-        message_suggestion = agent_message or (
-            f"I've uploaded a {extracted_json.get('document_type', 'document')} ({file.filename}). "
-            f"I've extracted the information. Please review and confirm."
-        )
+
+        # Prepare response - Simple message to trigger card display
+        # Frontend will use the extracted_json from ocr_result to display the card
+        message_suggestion = "SHOW_EXTRACTION_CARD"  # Special marker for frontend to display card
         
         # Enhance OCR result with extracted JSON
         enhanced_ocr_result = {
@@ -478,7 +536,8 @@ async def upload_image(
             image_id=image_id,
             filename=file.filename or "uploaded_file",
             ocr_result=enhanced_ocr_result,
-            message=message_suggestion
+            message=message_suggestion,
+            document_id=str(storage_result.get("id")) if storage_result.get("id") else None
         )
         
     except HTTPException:

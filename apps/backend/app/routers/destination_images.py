@@ -15,19 +15,19 @@ image_service = ImageGeneratorService()
 @router.get("/{country}")
 async def get_destination_image(country: str):
     """
-    Get or generate an image for a destination country.
+    Get an existing image for a destination country.
     
-    If the image doesn't exist, it will be generated using DALL-E.
-    Returns the image file or a 404 if generation fails.
+    Only returns images that already exist. Does not generate new images.
+    Returns 404 if the image doesn't exist.
     """
     try:
-        # Generate or get existing image
-        image_path_relative = await image_service.get_or_generate_image(country)
+        # Only get existing image, don't generate
+        image_path_relative = image_service.get_image_path_relative(country)
         
         if not image_path_relative:
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Could not generate image for {country}. OpenAI API may not be configured."
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Image not found for {country}"
             )
         
         # Return the image file

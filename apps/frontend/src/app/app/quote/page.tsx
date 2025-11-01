@@ -27,6 +27,7 @@ interface Message {
   timestamp: Date
   extractedData?: any  // Extracted JSON data from OCR
   fileAttachment?: FileAttachmentData  // File attachment for user messages
+  documentId?: string  // Document ID for editing extracted data
 }
 
 interface TripDetails {
@@ -63,6 +64,82 @@ interface ConversationState {
   travelers_data?: TravelersData
   preferences?: Preferences
   quote_data?: QuoteData
+}
+
+// Utility function to extract Stripe checkout URLs from text
+function extractStripeCheckoutUrl(text: string): string | null {
+  const stripeUrlPattern = /https:\/\/checkout\.stripe\.com\/[^\s\)]+/gi
+  const match = text.match(stripeUrlPattern)
+  return match ? match[0] : null
+}
+
+// Utility function to extract all URLs from text
+function extractUrls(text: string): string[] {
+  const urlPattern = /https?:\/\/[^\s\)]+/gi
+  return text.match(urlPattern) || []
+}
+
+// Component to render message content with clickable URLs
+function MessageContent({ content }: { content: string }) {
+  const stripeCheckoutUrl = extractStripeCheckoutUrl(content)
+  const allUrls = extractUrls(content)
+  
+  // If there's a Stripe checkout URL, extract it and render specially
+  if (stripeCheckoutUrl) {
+    // Split content at the Stripe URL (escape special regex characters)
+    const escapedUrl = stripeCheckoutUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const parts = content.split(new RegExp(escapedUrl, 'i'))
+    
+    return (
+      <div className="space-y-3">
+        {/* Render text before URL */}
+        {parts[0] && parts[0].trim() && (
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{parts[0]}</p>
+        )}
+        {/* Stripe checkout button */}
+        <a
+          href={stripeCheckoutUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-block bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 py-3 rounded-lg transition-colors shadow-md"
+        >
+          Proceed to Payment
+        </a>
+        {/* Render text after URL */}
+        {parts[1] && parts[1].trim() && (
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{parts[1]}</p>
+        )}
+      </div>
+    )
+  }
+  
+  // Render regular content with clickable URLs
+  if (allUrls.length > 0) {
+    const parts = content.split(/(https?:\/\/[^\s\)]+)/gi)
+    return (
+      <p className="text-sm leading-relaxed whitespace-pre-wrap">
+        {parts.map((part, index) => {
+          if (part.match(/^https?:\/\//i)) {
+            return (
+              <a
+                key={index}
+                href={part}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-indigo-600 hover:text-indigo-800 underline break-all"
+              >
+                {part}
+              </a>
+            )
+          }
+          return <span key={index}>{part}</span>
+        })}
+      </p>
+    )
+  }
+  
+  // No URLs, render plain text
+  return <p className="text-sm leading-relaxed whitespace-pre-wrap">{content}</p>
 }
 
 export default function QuotePage() {
@@ -200,12 +277,53 @@ export default function QuotePage() {
 
       // Transform messages from API format to component format
       if (data.messages && data.messages.length > 0) {
-        const transformedMessages = data.messages.map((msg: any, idx: number) => ({
-          id: `${idx}`,
-          role: msg.role,
-          content: msg.content,
-          timestamp: new Date()
-        }))
+        // Check if there's document_data in state that we can attach to messages
+        const documentData = data.state?.document_data || []
+        
+        const transformedMessages = data.messages.map((msg: any, idx: number) => {
+          const message: Message = {
+            id: `${idx}`,
+            role: msg.role,
+            content: msg.content,
+            timestamp: new Date()
+          }
+          
+          // If this is an assistant message, check if it follows a document upload
+          if (msg.role === 'assistant' && documentData.length > 0) {
+            // Check if previous message was a document upload
+            const prevMsg = idx > 0 ? data.messages[idx - 1] : null
+            const isAfterDocumentUpload = prevMsg && 
+              prevMsg.role === 'user' && 
+              (prevMsg.content?.includes('[User uploaded a document') || 
+               prevMsg.content?.toLowerCase().includes('uploaded a document'))
+            
+            // Also check if this message mentions extracted details (e.g., "I've extracted", "extracted information")
+            const mentionsExtraction = msg.content && (
+              msg.content.includes('extracted') ||
+              msg.content.includes('extraction') ||
+              msg.content.includes('I\'ve extracted') ||
+              msg.content.includes('extracted the following')
+            )
+            
+            // Attach extractedData if this message is about document extraction
+            if (isAfterDocumentUpload || mentionsExtraction) {
+              // Find the most recent document that matches
+              // Try to match by checking if message mentions the filename or use latest
+              const latestDoc = documentData[documentData.length - 1]
+              if (latestDoc?.extracted_json) {
+                message.extractedData = latestDoc.extracted_json
+                console.log('🔍 [DEBUG] Attached extractedData to assistant message:', {
+                  messageIndex: idx,
+                  isAfterDocumentUpload,
+                  mentionsExtraction,
+                  extractedData: latestDoc.extracted_json
+                })
+              }
+            }
+          }
+          
+          return message
+        })
         setMessages(transformedMessages)
       }
 
@@ -290,7 +408,7 @@ export default function QuotePage() {
     }
   }
 
-  const handleFileUpload = async (file: File) => {
+  const handleFileUpload = async (file: File, userMessage?: string) => {
     setIsUploading(true)
 
     try {
@@ -327,6 +445,10 @@ export default function QuotePage() {
       const formData = new FormData()
       formData.append('file', file)
       formData.append('session_id', sessionId)
+      // Include user message if provided (this combines text and file as context)
+      if (userMessage) {
+        formData.append('user_message', userMessage)
+      }
 
       // Upload file
       const uploadResponse = await fetch(`${API_URL}/chat/upload-image`, {
@@ -344,11 +466,17 @@ export default function QuotePage() {
 
       const uploadData = await uploadResponse.json()
 
-      // Add user message with file attachment (like ChatGPT)
-      const userMessage: Message = {
+      // DEBUG: Log upload response to check extracted data
+      console.log('🔍 [DEBUG] Upload response:', uploadData)
+      console.log('🔍 [DEBUG] ocr_result:', uploadData.ocr_result)
+      console.log('🔍 [DEBUG] extracted_json:', uploadData.ocr_result?.extracted_json)
+      console.log('🔍 [DEBUG] Will set extractedData to:', uploadData.ocr_result?.extracted_json || null)
+
+      // Add user message with file attachment and optional text (like ChatGPT)
+      const userMessageObj: Message = {
         id: Date.now().toString(),
         role: 'user',
-        content: '',  // Empty content - we'll show the file attachment instead
+        content: userMessage || '',  // Include user message if provided
         timestamp: new Date(),
         fileAttachment: {
           filename: file.name,
@@ -357,24 +485,36 @@ export default function QuotePage() {
         }
       }
 
-      setMessages(prev => [...prev, userMessage])
+      setMessages(prev => [...prev, userMessageObj])
 
       // Add assistant response with extracted data
       if (uploadData.message) {
+        const extractedDataValue = uploadData.ocr_result?.extracted_json || null
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
           content: uploadData.message,
           timestamp: new Date(),
-          extractedData: uploadData.ocr_result?.extracted_json || null
+          extractedData: extractedDataValue,
+          documentId: uploadData.document_id || undefined  // Store document ID for editing
         }
+        console.log('🔍 [DEBUG] Created assistant message with extractedData:', extractedDataValue)
+        console.log('🔍 [DEBUG] Document ID:', uploadData.document_id)
+        console.log('🔍 [DEBUG] Full assistant message:', assistantMessage)
         setMessages(prev => [...prev, assistantMessage])
+        
+        // Update conversation state from upload response if available
+        // But DON'T reload history as it will overwrite extractedData
+        if (uploadData.state) {
+          setConversationState(uploadData.state)
+        }
+      } else {
+        console.warn('⚠️ [DEBUG] uploadData.message is missing, not creating assistant message')
       }
 
-      // Reload chat history to get updated state
-      if (sessionId) {
-        await loadChatHistory(sessionId)
-      }
+      // NOTE: We don't reload chat history here because it would overwrite the extractedData
+      // The uploaded message with extractedData is already added above
+      // If you need to sync state, update conversationState directly instead
 
     } catch (error: any) {
       console.error('File upload error:', error)
@@ -399,18 +539,11 @@ export default function QuotePage() {
   }
 
   const handleSendMessage = async () => {
-    // If there's a selected file, upload it (file can be sent without text)
+    // If there's a selected file, upload it with text context (if provided)
     if (selectedFile) {
-      await handleFileUpload(selectedFile)
-      // If there's also text, send it as a separate message
-      if (inputValue.trim()) {
-        // Wait a bit for upload to complete, then send text message
-        setTimeout(() => {
-          const textToSend = inputValue
-          setInputValue('')
-          handleSendTextMessage(textToSend)
-        }, 500)
-      }
+      const textToSend = inputValue.trim()
+      await handleFileUpload(selectedFile, textToSend || undefined)
+      setInputValue('') // Clear input after sending
       return
     }
 
@@ -507,6 +640,18 @@ export default function QuotePage() {
       }
 
       setMessages(prev => [...prev, assistantMessage])
+
+      // Check if the message contains a Stripe checkout URL
+      const stripeUrlMatch = data.message.match(/https:\/\/checkout\.stripe\.com\/[^\s]+/)
+      if (stripeUrlMatch) {
+        const checkoutUrl = stripeUrlMatch[0]
+        console.log('💳 Detected Stripe checkout URL, redirecting:', checkoutUrl)
+
+        // Auto-redirect to Stripe checkout after a short delay so user can see the message
+        setTimeout(() => {
+          window.location.href = checkoutUrl
+        }, 2000)
+      }
 
       // Update conversation state for real-time UI updates
       if (data.state) {
@@ -693,10 +838,14 @@ export default function QuotePage() {
                         </div>
                       </div>
                       {/* Show extracted data card for assistant messages with extracted data */}
-                      {message.role === 'assistant' && message.extractedData && (
+                      {message.role === 'assistant' && (() => {
+                        console.log('🔍 [DEBUG] Rendering check - message.extractedData:', message.extractedData)
+                        return message.extractedData
+                      })() && (
                         <div className="mt-2">
                           <ExtractedDataCard
                             extractedData={message.extractedData}
+                            documentId={message.documentId}
                             onConfirm={async () => {
                               // Send confirmation message directly
                               const confirmMessage = "Yes, confirm"
@@ -745,8 +894,17 @@ export default function QuotePage() {
                               }
                             }}
                             onEdit={() => {
-                              // User can edit by typing
-                              setInputValue("I need to edit: ")
+                              // Edit button click handled by component itself (sets isEditing)
+                            }}
+                            onSave={(updatedData) => {
+                              // Update the message's extractedData after save
+                              setMessages(prev => prev.map(msg => 
+                                msg.id === message.id 
+                                  ? { ...msg, extractedData: updatedData }
+                                  : msg
+                              ))
+                              // Optionally trigger re-processing by sending a message
+                              // For now, just update the UI
                             }}
                             onReject={async () => {
                               // Send rejection message directly
@@ -883,7 +1041,7 @@ export default function QuotePage() {
 
           {/* Copilot Panel */}
           <div className="lg:col-span-1">
-            <CopilotPanel conversationState={conversationState} />
+            <CopilotPanel conversationState={conversationState} sessionId={currentSessionId || ''} />
           </div>
         </div>
       </div>

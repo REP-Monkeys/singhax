@@ -209,17 +209,28 @@ def create_conversation_graph(db) -> StateGraph:
     def orchestrator(state: ConversationState) -> ConversationState:
         """Route conversation based on LLM intent classification."""
         
-        # Initialize loop protection
+        # Initialize essential state fields if missing
         if "_loop_count" not in state:
             state["_loop_count"] = 0
         if "_ready_for_pricing" not in state:
             state["_ready_for_pricing"] = False
         if "_pricing_complete" not in state:
             state["_pricing_complete"] = False
+        if "trip_details" not in state:
+            state["trip_details"] = {}
+        if "travelers_data" not in state:
+            state["travelers_data"] = {}
+        if "preferences" not in state:
+            state["preferences"] = {}
+        if "collected_slots" not in state:
+            state["collected_slots"] = {}
+        if "quote_data" not in state:
+            state["quote_data"] = {}
         
-        state["_loop_count"] += 1
+        # Don't increment loop_count here - it's handled in should_continue to avoid double-counting
+        loop_count = state.get("_loop_count", 0)
         print(f"\n{'='*60}")
-        print(f"🔀 ORCHESTRATOR (iteration {state['_loop_count']})")
+        print(f"🔀 ORCHESTRATOR (iteration {loop_count})")
         print(f"{'='*60}")
         
         messages = state.get("messages", [])
@@ -228,13 +239,46 @@ def create_conversation_graph(db) -> StateGraph:
             return state
         
         last_message = messages[-1]
+        
+        # CRITICAL: Skip intent classification if last message is from AI
+        # This prevents re-classifying intent after we've already responded
+        if isinstance(last_message, AIMessage):
+            print(f"   ⏭️  Skipping intent classification (last message is AI)")
+            # Preserve existing intent if we have one, otherwise default to quote
+            if "current_intent" not in state:
+                state["current_intent"] = "quote"
+            return state
+        
         user_message = last_message.content if hasattr(last_message, 'content') else str(last_message)
+        
+        # Check if we're already in an active quote flow - don't re-classify unless user changes topic
+        in_active_flow = (
+            state.get("trip_details", {}).get("destination") or
+            state.get("current_question") or
+            state.get("awaiting_confirmation", False)
+        )
+        
+        # CRITICAL: Always re-classify when pricing is complete (user might want to purchase)
+        # This ensures LLM handles payment intent detection, not hardcoded keywords
+        pricing_complete = state.get("_pricing_complete", False)
+        
+        # If we're in an active flow and user message is short/continuing the conversation, 
+        # keep the quote intent without re-classifying (unless pricing is complete)
+        if in_active_flow and "current_intent" in state and not pricing_complete:
+            # Only re-classify if user seems to be changing topic (mentions policy, claim, etc.)
+            # Note: Payment detection handled by LLM when pricing_complete is True
+            user_lower = user_message.lower()
+            topic_change_keywords = ["policy", "claim", "coverage", "what does", "explain", "document", "upload"]
+            if not any(keyword in user_lower for keyword in topic_change_keywords):
+                print(f"   ⏭️  In active quote flow, preserving intent: {state.get('current_intent')}")
+                return state
         
         # Get conversation history for context
         history = []
         for msg in messages[-5:]:  # Last 5 messages
-            content = msg.content if hasattr(msg, 'content') else str(msg)
-            history.append(content)
+            if isinstance(msg, HumanMessage) or (hasattr(msg, 'content') and not isinstance(msg, AIMessage)):
+                content = msg.content if hasattr(msg, 'content') else str(msg)
+                history.append(content)
         
         # Use LLM to classify intent
         intent_result = llm_client.classify_intent(user_message, history)
@@ -244,15 +288,16 @@ def create_conversation_graph(db) -> StateGraph:
         
         state["current_intent"] = intent
         state["confidence_score"] = confidence
-        
+
         print(f"Intent: {intent} (confidence: {confidence:.2f})")
-        
+
         # Check if human handoff needed (low confidence)
-        if confidence < 0.6:
+        # Exception: "quote" intent with low confidence should still proceed (common for simple trip queries)
+        if confidence < 0.6 and intent != "quote":
             state["requires_human"] = True
         else:
             state["requires_human"] = False
-        
+
         return state
     
     def needs_assessment(state: ConversationState) -> ConversationState:
@@ -271,12 +316,24 @@ def create_conversation_graph(db) -> StateGraph:
             if "confirmation_received" not in state:
                 state["confirmation_received"] = False
             
-            trip = state["trip_details"]
-            travelers = state["travelers_data"]
-            prefs = state["preferences"]
+            # CRITICAL: Get references to dictionaries, not copies
+            # This ensures changes persist in state
+            if "trip_details" not in state:
+                state["trip_details"] = {}
+            if "travelers_data" not in state:
+                state["travelers_data"] = {}
+            if "preferences" not in state:
+                state["preferences"] = {}
+            
+            trip = state["trip_details"]  # Direct reference, not .get() copy
+            travelers = state["travelers_data"]  # Direct reference
+            prefs = state["preferences"]  # Direct reference
+            
+            if not state.get("messages"):
+                return state
             
             last_message = state["messages"][-1]
-            user_input = last_message.content
+            user_input = last_message.content if hasattr(last_message, 'content') else str(last_message)
             
             # Prepare current slots for extraction
             current_slots = {
@@ -289,6 +346,90 @@ def create_conversation_graph(db) -> StateGraph:
             
             # Extract information from user message using LLM
             extracted = llm_client.extract_trip_info(user_input, current_slots)
+
+            # CRITICAL: Check if document data was uploaded and merge it
+            document_data = state.get("document_data", [])
+            if document_data:
+                print(f"   📄 Found {len(document_data)} uploaded document(s)")
+                # Process the most recent document
+                latest_doc = document_data[-1]
+                extracted_json = latest_doc.get("extracted_json", {})
+                document_type = extracted_json.get("document_type", "unknown")
+
+                print(f"   📋 Document type: {document_type}")
+                print(f"   🔍 Merging document data with LLM extraction...")
+
+                # Merge document data (document data takes precedence over LLM extraction from text)
+                if document_type == "flight_confirmation":
+                    # Map nested JSON structure to flat fields for Ancileo API
+                    # Extract destination from nested structure: destination.country or destination
+                    dest_field = extracted_json.get("destination")
+                    if isinstance(dest_field, dict):
+                        # Nested structure: {"country": "South Korea", "city": "Seoul", ...}
+                        destination = dest_field.get("country")
+                    elif isinstance(dest_field, str):
+                        # Flat structure: "South Korea"
+                        destination = dest_field
+                    else:
+                        destination = None
+
+                    if destination:
+                        extracted["destination"] = destination
+                        print(f"      ✅ Extracted destination from document: {destination}")
+
+                    # Extract departure date from nested structure: flight_details.departure.date or departure_date
+                    flight_details = extracted_json.get("flight_details", {})
+                    departure_info = flight_details.get("departure", {})
+                    departure_date = departure_info.get("date") or extracted_json.get("departure_date")
+
+                    if departure_date:
+                        extracted["departure_date"] = departure_date
+                        print(f"      ✅ Extracted departure_date from document: {departure_date}")
+
+                    # Extract return date from nested structure: flight_details.return.date or return_date
+                    return_info = flight_details.get("return", {})
+                    return_date = return_info.get("date") or extracted_json.get("return_date")
+
+                    if return_date:
+                        extracted["return_date"] = return_date
+                        print(f"      ✅ Extracted return_date from document: {return_date}")
+
+                    # Extract travelers count from travelers array or travelers_count field
+                    travelers_list = extracted_json.get("travelers", [])
+                    travelers_count = len(travelers_list) if travelers_list else extracted_json.get("travelers_count")
+
+                    if travelers_count:
+                        extracted["travelers_count"] = travelers_count
+                        print(f"      ✅ Extracted travelers_count from document: {travelers_count}")
+
+                    # Store FULL document JSON in trip metadata_json
+                    if state.get("trip_id"):
+                        try:
+                            existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
+                            if existing_trip:
+                                # Update or create metadata_json
+                                if not existing_trip.metadata_json:
+                                    existing_trip.metadata_json = {}
+
+                                # Store full document data under "documents" key
+                                if "documents" not in existing_trip.metadata_json:
+                                    existing_trip.metadata_json["documents"] = []
+
+                                existing_trip.metadata_json["documents"].append({
+                                    "document_type": document_type,
+                                    "uploaded_at": latest_doc.get("uploaded_at"),
+                                    "filename": latest_doc.get("filename"),
+                                    "full_extraction": extracted_json  # Store complete JSON
+                                })
+
+                                db.commit()
+                                print(f"      ✅ Stored full document JSON in trip metadata_json")
+                        except Exception as e:
+                            print(f"      ⚠️  Failed to store document in metadata_json: {e}")
+
+                # Clear document_data after processing to avoid re-processing
+                state["document_data"] = []
+                print(f"   ✅ Document data merged and cleared")
 
             # Fallback: Direct date pattern matching if LLM didn't extract dates
             # TEMPORARILY COMMENTED OUT FOR TESTING
@@ -326,12 +467,25 @@ def create_conversation_graph(db) -> StateGraph:
                         # Check if trip already exists for this session
                         existing_trip = db.query(Trip).filter(Trip.session_id == state["session_id"]).first()
                         if not existing_trip:
+                            # Build initial metadata JSON
+                            from app.services.json_builders import build_trip_metadata_json
+                            from datetime import datetime
+                            
+                            metadata_json = build_trip_metadata_json(
+                                session_id=state["session_id"],
+                                user_id=state["user_id"],
+                                conversation_flow={
+                                    "started_at": datetime.now().isoformat()
+                                }
+                            )
+                            
                             new_trip = Trip(
                                 user_id=uuid.UUID(state["user_id"]),
                                 session_id=state["session_id"],
                                 status="draft",
                                 destinations=[extracted["destination"]],
-                                travelers_count=1  # Default, will update later
+                                travelers_count=1,  # Default, will update later
+                                metadata_json=metadata_json
                             )
                             db.add(new_trip)
                             db.commit()
@@ -342,6 +496,17 @@ def create_conversation_graph(db) -> StateGraph:
                             state["trip_id"] = str(existing_trip.id)
                             # Update destination if changed
                             existing_trip.destinations = [extracted["destination"]]
+                            # Update metadata_json if not set
+                            if not existing_trip.metadata_json:
+                                from app.services.json_builders import build_trip_metadata_json
+                                from datetime import datetime
+                                existing_trip.metadata_json = build_trip_metadata_json(
+                                    session_id=state["session_id"],
+                                    user_id=state["user_id"],
+                                    conversation_flow={
+                                        "started_at": datetime.now().isoformat()
+                                    }
+                                )
                             db.commit()
                             print(f"   ✅ Updated existing trip: {existing_trip.id}")
                     except Exception as e:
@@ -438,7 +603,29 @@ def create_conversation_graph(db) -> StateGraph:
                                 print(f"   ✅ Updated trip travelers_count: {len(valid_ages)}")
                         except Exception as e:
                             print(f"   ⚠️  Failed to update trip travelers_count: {e}")
-            
+
+            # Handle travelers_count from document (when ages aren't available)
+            if "travelers_count" in extracted and not travelers.get("count"):
+                count = extracted["travelers_count"]
+                if isinstance(count, int) and count > 0:
+                    travelers["count"] = count
+                    # Default to adult ages if no specific ages provided
+                    # This allows the quote flow to continue without asking for ages
+                    if not travelers.get("ages"):
+                        travelers["ages"] = [30] * count  # Default adult age
+                    print(f"   ✅ Set travelers count from document: {count} (using default adult ages)")
+
+                    # Update trip with travelers count
+                    if state.get("trip_id"):
+                        try:
+                            existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
+                            if existing_trip:
+                                existing_trip.travelers_count = count
+                                db.commit()
+                                print(f"   ✅ Updated trip travelers_count: {count}")
+                        except Exception as e:
+                            print(f"   ⚠️  Failed to update trip travelers_count: {e}")
+
             # Only accept adventure_sports extraction when:
             # 1. We're currently asking the adventure question, OR
             # 2. The user explicitly mentions adventure-related keywords
@@ -452,23 +639,37 @@ def create_conversation_graph(db) -> StateGraph:
                 # Validate extracted value against user input for yes/no responses
                 # If user says yes/no but LLM extracts opposite, don't trust the extraction
                 if current_q == "adventure_sports":
-                    pos_words = ["yes", "yeah", "yep", "sure", "probably", "i am", "i'm", "i will", "i'll", 
+                    pos_words = ["yes", "yeah", "yep", "sure", "probably", "i am", "i'm", "i will", "i'll",
                                 "i do", "absolutely", "definitely", "i plan", "i'm planning", "i will be",
                                 "i am planning", "i do plan", "of course", "certainly", "definitely yes"]
                     neg_words = ["no", "nope", "not", "none", "nah", "i'm not", "i am not", "i won't", "i will not",
                                 "i don't", "i do not", "absolutely not", "definitely not", "no way"]
                     said_yes = any(word in user_input_lower for word in pos_words)
                     said_no = any(word in user_input_lower for word in neg_words)
-                    
+
+                    # Handle None extraction - use user's actual words
+                    if extracted["adventure_sports"] is None:
+                        if said_yes:
+                            prefs["adventure_sports"] = True
+                            extracted_info = True
+                            print(f"   ✅ LLM extracted None, but user said yes - set to True")
+                        elif said_no:
+                            prefs["adventure_sports"] = False
+                            extracted_info = True
+                            print(f"   ✅ LLM extracted None, but user said no - set to False")
+                        else:
+                            print(f"   ⚠️  LLM extracted None and no clear yes/no detected - will re-ask")
                     # If user clearly said yes/no, validate extraction
-                    if said_yes and extracted["adventure_sports"] == False:
-                        print(f"   ⚠️  LLM extracted False but user said yes - ignoring extraction, will use special handling")
-                        # Don't set extracted_info, let special handling below catch it
+                    elif said_yes and extracted["adventure_sports"] == False:
+                        print(f"   ⚠️  LLM extracted False but user said yes - correcting to True")
+                        prefs["adventure_sports"] = True
+                        extracted_info = True
                     elif said_no and extracted["adventure_sports"] == True:
-                        print(f"   ⚠️  LLM extracted True but user said no - ignoring extraction, will use special handling")
-                        # Don't set extracted_info, let special handling below catch it
+                        print(f"   ⚠️  LLM extracted True but user said no - correcting to False")
+                        prefs["adventure_sports"] = False
+                        extracted_info = True
                     else:
-                        # Extraction matches user intent (or no clear yes/no), accept it
+                        # Extraction matches user intent, accept it
                         prefs["adventure_sports"] = extracted["adventure_sports"]
                         extracted_info = True
                         print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (validated against user input)")
@@ -544,58 +745,176 @@ def create_conversation_graph(db) -> StateGraph:
                 state["messages"].append(AIMessage(content=response))
                 return state
             
-            # Handle confirmation flow
-            if state.get("awaiting_confirmation"):
+            # Ensure departure_country is set (default to SG for Singapore market)
+            if not trip.get("departure_country"):
+                trip["departure_country"] = "SG"
+            
+            # Extract arrival_country from destination if we have destination but not arrival_country
+            if trip.get("destination") and not trip.get("arrival_country"):
+                try:
+                    arrival_country_iso = GeoMapper.get_country_iso_code(trip["destination"])
+                    trip["arrival_country"] = arrival_country_iso
+                    print(f"   ✅ Extracted arrival_country: {arrival_country_iso} from destination: {trip['destination']}")
+                except ValueError as e:
+                    print(f"   ⚠️  Could not convert destination '{trip['destination']}' to ISO code: {e}")
+                    # Will need to ask user for clarification
+            
+            # Calculate adults_count and children_count from ages if we have ages
+            if travelers.get("ages") and not trip.get("adults_count"):
+                ages = travelers["ages"]
+                adults_count = sum(1 for age in ages if age >= 18)
+                children_count = sum(1 for age in ages if age < 18)
+                # Ensure at least 1 adult for Ancileo API
+                if adults_count == 0 and children_count > 0:
+                    adults_count = 1
+                    children_count = max(0, children_count - 1)
+                trip["adults_count"] = adults_count
+                trip["children_count"] = children_count
+                print(f"   ✅ Calculated adults_count: {adults_count}, children_count: {children_count}")
+            
+            # Debug: Print current trip state
+            print(f"   🔍 Current trip state: destination={trip.get('destination')}, dep_date={trip.get('departure_date')}, ret_date={trip.get('return_date')}")
+            print(f"   🔍 Current travelers state: ages={travelers.get('ages')}, count={travelers.get('count')}")
+            
+            # Determine what information is still missing (including Ancileo API required fields)
+            missing = []
+            if not trip.get("destination"):
+                missing.append("destination")
+            # Check for dates - handle both date objects and strings
+            dep_date_value = trip.get("departure_date")
+            ret_date_value = trip.get("return_date")
+            if not dep_date_value or (isinstance(dep_date_value, str) and not dep_date_value.strip()):
+                missing.append("departure_date")
+            if not ret_date_value or (isinstance(ret_date_value, str) and not ret_date_value.strip()):
+                missing.append("return_date")
+            if not travelers.get("ages") and not travelers.get("count"):
+                missing.append("traveler ages")
+            # Ancileo API required fields
+            if not trip.get("arrival_country"):
+                missing.append("destination country code")  # More specific than just "destination"
+            if not trip.get("adults_count") and not travelers.get("ages"):
+                missing.append("number of adults")
+            # departure_country defaults to "SG", so not needed in missing check
+            
+            # Handle confirmation flow (AFTER checking for missing info)
+            # Also check if user message contains confirmation keywords even if awaiting_confirmation flag isn't set
+            # This handles cases where the flag might not be properly set but user is confirming
+            user_response_lower = user_input.lower() if user_input else ""
+            contains_confirmation = any(word in user_response_lower for word in ["yes", "correct", "confirm", "looks good", "that's right", "yeah", "confirmed"])
+            contains_rejection = any(word in user_response_lower for word in ["no", "wrong", "incorrect", "change", "fix", "reject"])
+            
+            if state.get("awaiting_confirmation") or (contains_confirmation and not contains_rejection and not state.get("confirmation_received")):
                 # Check if user confirmed or wants to make changes
-                user_response_lower = user_input.lower()
-                said_yes = any(word in user_response_lower for word in ["yes", "correct", "confirm", "looks good", "that's right", "yeah"])
-                said_no = any(word in user_response_lower for word in ["no", "wrong", "incorrect", "change", "fix"])
+                said_yes = contains_confirmation
+                said_no = contains_rejection
                 
                 if said_yes:
-                    state["confirmation_received"] = True
-                    state["_ready_for_pricing"] = True
                     state["awaiting_confirmation"] = False
                     state["current_question"] = ""  # Clear the question
-                    print(f"   ✅ User confirmed - ready for pricing")
+                    print(f"   ✅ User confirmed")
                     
-                    # Generate policy recommendation if we have enough data
-                    try:
-                        policy_recommender = PolicyRecommender()
-                        
-                        # Build extracted data structure for recommendation
-                        extracted_data = {
-                            "travelers": [
-                                {
-                                    "age": age,
-                                    "pre_existing_conditions": {"has_conditions": False}  # Would need to ask separately
-                                }
-                                for age in state.get("travelers_data", {}).get("ages", [])
-                            ],
-                            "trip_details": {
-                                "destination": {"country": state.get("trip_details", {}).get("destination")},
-                                "trip_type": {"value": "single_return"},  # Default assumption
-                                "duration_days": {"value": None}  # Would calculate from dates
-                            },
-                            "activities": {
-                                "adventure_sports": {"value": state.get("preferences", {}).get("adventure_sports", False)}
-                            },
-                            "airline_info": {"is_scoot": False}  # Would detect from document
-                        }
-                        
-                        recommendation = policy_recommender.recommend_policy(extracted_data)
-                        
-                        response = "Great! Based on your trip details, I recommend:\n\n"
-                        response += f"**{recommendation.get('recommended_policy', 'Travel Insurance')}** "
-                        response += f"({recommendation.get('recommended_tier', 'Standard')} tier)\n\n"
-                        response += f"{recommendation.get('reasoning', '')}\n\n"
-                        response += "Let me calculate your insurance options..."
-                        
-                    except Exception as e:
-                        print(f"   ⚠️  Policy recommendation failed: {e}")
-                        response = "Great! Let me calculate your insurance options..."
+                    # Ensure dates are date objects, not strings
+                    if trip.get("departure_date") and isinstance(trip["departure_date"], str):
+                        trip["departure_date"] = parse_date_safe(trip["departure_date"])
+                    if trip.get("return_date") and isinstance(trip["return_date"], str):
+                        trip["return_date"] = parse_date_safe(trip["return_date"])
                     
-                    state["messages"].append(AIMessage(content=response))
-                    return state
+                    # Ensure arrival_country is set if we have destination
+                    if trip.get("destination") and not trip.get("arrival_country"):
+                        try:
+                            arrival_country_iso = GeoMapper.get_country_iso_code(trip["destination"])
+                            trip["arrival_country"] = arrival_country_iso
+                            print(f"   ✅ Extracted arrival_country: {arrival_country_iso} from destination: {trip['destination']}")
+                        except ValueError as e:
+                            print(f"   ⚠️  Could not convert destination '{trip['destination']}' to ISO code: {e}")
+                    
+                    # Ensure adults_count is set if we have travelers
+                    if travelers.get("ages") and not trip.get("adults_count"):
+                        ages = travelers["ages"]
+                        adults_count = sum(1 for age in ages if age >= 18)
+                        children_count = sum(1 for age in ages if age < 18)
+                        if adults_count == 0 and children_count > 0:
+                            adults_count = 1
+                            children_count = max(0, children_count - 1)
+                        trip["adults_count"] = adults_count
+                        trip["children_count"] = children_count
+                        print(f"   ✅ Calculated adults_count: {adults_count}, children_count: {children_count}")
+                    elif travelers.get("count") and not trip.get("adults_count"):
+                        trip["adults_count"] = travelers["count"]
+                        trip["children_count"] = 0
+                        print(f"   ⚠️  Using travelers count as adults_count: {travelers['count']}")
+                    
+                    # Debug: Print what we're checking after normalization
+                    print(f"   🔍 After normalization check:")
+                    print(f"      destination: {trip.get('destination')}")
+                    print(f"      departure_date: {trip.get('departure_date')} (type: {type(trip.get('departure_date'))})")
+                    print(f"      return_date: {trip.get('return_date')} (type: {type(trip.get('return_date'))})")
+                    print(f"      travelers.ages: {travelers.get('ages')}")
+                    print(f"      travelers.count: {travelers.get('count')}")
+                    print(f"      adults_count: {trip.get('adults_count')}")
+                    print(f"      arrival_country: {trip.get('arrival_country')}")
+                    
+                    # Check if all required information is present (after ensuring formats are correct)
+                    # Handle dates - they might be date objects or strings
+                    has_dep_date_after = bool(trip.get("departure_date"))
+                    has_ret_date_after = bool(trip.get("return_date"))
+                    has_travelers_after = bool(travelers.get("ages") or travelers.get("count") or trip.get("adults_count") is not None)
+                    
+                    all_required_present = (
+                        trip.get("destination") and
+                        has_dep_date_after and
+                        has_ret_date_after and
+                        has_travelers_after and
+                        trip.get("arrival_country") and
+                        trip.get("adults_count") is not None
+                    )
+                    
+                    print(f"   🔍 all_required_present (after normalization): {all_required_present}")
+                    
+                    if all_required_present:
+                        # Check if adventure_sports still needs to be asked
+                        if prefs.get("adventure_sports") is None:
+                            print(f"   🔍 All required fields present, but adventure_sports not answered yet")
+                            state["awaiting_confirmation"] = False
+                            state["current_question"] = "adventure_sports"
+                            response = "Thank you for confirming! One more question: Are you planning any adventure activities like skiing, scuba diving, trekking, or bungee jumping?"
+                            state["messages"].append(AIMessage(content=response))
+                            return state
+                        else:
+                            # All info is present including adventure - proceed to pricing
+                            state["confirmation_received"] = True
+                            state["_ready_for_pricing"] = True
+                            print(f"   ✅ All required info present - ready for pricing")
+                            response = "Great! Let me calculate your insurance options..."
+                            state["messages"].append(AIMessage(content=response))
+                            return state  # Return early - routing will handle going to pricing
+                    else:
+                        # Still missing some info - continue collecting
+                        # Recalculate missing fields after normalization
+                        missing_after_check = []
+                        if not trip.get("destination"):
+                            missing_after_check.append("destination")
+                        if not trip.get("departure_date"):
+                            missing_after_check.append("departure date")
+                        if not trip.get("return_date"):
+                            missing_after_check.append("return date")
+                        if not travelers.get("ages") and not trip.get("adults_count"):
+                            missing_after_check.append("traveler ages")
+                        if not trip.get("arrival_country"):
+                            missing_after_check.append("destination country code")
+                        if not trip.get("adults_count"):
+                            missing_after_check.append("number of adults")
+
+                        print(f"   ⚠️  Still missing info: {missing_after_check} - continuing to collect")
+                        # Don't set ready_for_pricing yet, continue asking questions below
+                        # Update the missing list with the recalculated missing fields
+                        missing = missing_after_check
+                        # Clear awaiting_confirmation to allow asking next question
+                        state["awaiting_confirmation"] = False
+                        state["current_question"] = ""  # Will be set below when asking next question
+                        state["_just_confirmed"] = True  # Flag to prepend acknowledgment to next question
+                        # DON'T append message or return here - let the code continue below to ask next question
+                        # The acknowledgment will be combined with the next question
                 elif said_no:
                     state["awaiting_confirmation"] = False
                     state["current_question"] = ""  # Clear to ask for corrections
@@ -608,116 +927,109 @@ def create_conversation_graph(db) -> StateGraph:
                     state["messages"].append(AIMessage(content=response))
                     return state
             
-            # Determine what information is still missing
-            missing = []
-            if not trip.get("destination"):
-                missing.append("destination")
-            if not trip.get("departure_date"):
-                missing.append("departure_date")
-            if not trip.get("return_date"):
-                missing.append("return_date")
-            if not travelers.get("ages"):
-                missing.append("travelers")
+            # Check if user provided everything at once (including Ancileo API required fields)
+            # Handle dates - they might be date objects or strings
+            has_dep_date = bool(trip.get("departure_date"))
+            has_ret_date = bool(trip.get("return_date"))
+            has_travelers_info = bool(travelers.get("ages") or travelers.get("count") or trip.get("adults_count") is not None)
             
-            # Check if user provided everything at once
             all_required_present = (
                 trip.get("destination") and
-                trip.get("departure_date") and
-                trip.get("return_date") and
-                travelers.get("ages")
+                has_dep_date and
+                has_ret_date and
+                has_travelers_info and
+                trip.get("arrival_country") and  # Ancileo API required
+                trip.get("adults_count") is not None  # Ancileo API required (can be 0, but must be set)
             )
+            
+            # Debug logging
+            if not all_required_present:
+                print(f"   🔍 all_required_present check failed:")
+                print(f"      destination: {bool(trip.get('destination'))}")
+                print(f"      departure_date: {has_dep_date} (value: {trip.get('departure_date')})")
+                print(f"      return_date: {has_ret_date} (value: {trip.get('return_date')})")
+                print(f"      travelers: {has_travelers_info} (ages: {travelers.get('ages')}, count: {travelers.get('count')}, adults_count: {trip.get('adults_count')})")
+                print(f"      arrival_country: {bool(trip.get('arrival_country'))}")
+                print(f"      adults_count set: {trip.get('adults_count') is not None}")
             
             # Generate appropriate response based on conversation state
             print(f"   🔍 Debug: missing={missing}, adventure_sports={prefs.get('adventure_sports')}, all_present={all_required_present}")
             print(f"   🔍 Conditions: awaiting_confirmation={state.get('awaiting_confirmation')}, adventure_is_none={prefs.get('adventure_sports') is None}")
             print(f"   🔍 Current question: {state.get('current_question')}")
             
-            # Priority: If we just answered adventure question and all required info is present, go to confirmation
-            # (This prevents asking for destination again after successfully answering adventure)
-            adventure_answered = prefs.get("adventure_sports") is not None
-            if not state.get("awaiting_confirmation") and all_required_present and adventure_answered:
-                print(f"   🔍 Branch: All info collected including adventure - going to confirmation")
-                # Set default for adventure_sports before showing confirmation if not answered yet (shouldn't happen here)
-                if "adventure_sports" not in prefs or prefs.get("adventure_sports") is None:
-                    prefs["adventure_sports"] = False
-                
+            # Priority 1: Show confirmation card FIRST when all required fields are present
+            # Adventure question comes AFTER user confirms the card
+            # DO NOT ask about adventure_sports or default it yet - that comes AFTER confirmation
+            if not state.get("awaiting_confirmation") and all_required_present:
+                print(f"   🔍 Branch: All required fields present - showing confirmation card")
+
                 dest = trip["destination"]
                 dep_date = trip["departure_date"]
                 ret_date = trip["return_date"]
+
+                # Ensure dates are date objects for formatting
+                if isinstance(dep_date, str):
+                    dep_date = parse_date_safe(dep_date)
+                if isinstance(ret_date, str):
+                    ret_date = parse_date_safe(ret_date)
+
+                if not dep_date or not ret_date:
+                    # Can't format dates, skip confirmation for now
+                    response = "I need your travel dates to proceed. When are you traveling?"
+                    state["current_question"] = "departure_date"
+                    state["messages"].append(AIMessage(content=response))
+                    return state
+
                 duration_days = (ret_date - dep_date).days + 1
-                
+
                 dep_formatted = dep_date.strftime("%B %d, %Y")
                 ret_formatted = ret_date.strftime("%B %d, %Y")
-                ages = ", ".join(map(str, travelers["ages"]))
-                adv = "Yes" if prefs.get("adventure_sports") else "No"
-                
+                ages = ", ".join(map(str, travelers.get("ages", []))) if travelers.get("ages") else "Not specified"
+
+                # ONLY show what was extracted from the document - NO adventure_sports yet
                 response = f"""Let me confirm your trip details:
 
 📍 Destination: {dest}
 📅 Travel dates: {dep_formatted} to {ret_formatted} ({duration_days} days)
 👥 Travelers: {len(travelers['ages'])} traveler(s) (ages: {ages})
-🏔️ Adventure activities: {adv}
 
 Is this information correct? (yes/no)"""
-                
+
                 state["awaiting_confirmation"] = True
                 state["current_question"] = "confirmation"
-                print(f"   💬 Asking for confirmation")
-            # Check adventure_sports BEFORE checking all_required_present (but only if not already answered)
-            elif not state.get("awaiting_confirmation") and all_required_present and prefs.get("adventure_sports") is None:
-                print(f"   🔍 Branch: Going to ask adventure question")
-                # Ask about adventure sports if all required info is present but adventure sports not answered
-                response = "Are you planning any adventure activities like skiing, scuba diving, trekking, or bungee jumping?"
-                state["current_question"] = "adventure_sports"
-                print(f"   💬 Asking adventure question: {response}")
+                print(f"   💬 Asking for confirmation (document extraction only - no adventure_sports yet)")
             elif missing:
                 print(f"   🔍 Branch: Asking missing questions")
+                # Check if we just came from confirmation - if so, prepend acknowledgment
+                acknowledgment = ""
+                if state.get("_just_confirmed"):
+                    acknowledgment = "Thank you for confirming! I just need a few more details to get you the best quote.\n\n"
+                    state["_just_confirmed"] = False  # Clear the flag
+
                 # Ask for next missing piece of information
                 if "destination" in missing:
-                    response = "Where are you traveling to?"
+                    response = f"{acknowledgment}Where are you traveling to?"
                     state["current_question"] = "destination"
                     print(f"   💬 Asking: {response}")
-                elif "departure_date" in missing:
-                    response = "When does your trip start? Please provide the date in YYYY-MM-DD format. For example: 2025-12-15"
+                elif "departure_date" in missing or "departure date" in missing:
+                    response = f"{acknowledgment}When does your trip start? Please provide the date in YYYY-MM-DD format. For example: 2025-12-15"
                     state["current_question"] = "departure_date"
                     print(f"   💬 Asking: {response}")
-                elif "return_date" in missing:
-                    response = "When do you return to Singapore? Please provide the date in YYYY-MM-DD format. For example: 2025-12-22"
+                elif "return_date" in missing or "return date" in missing:
+                    response = f"{acknowledgment}When do you return to Singapore? Please provide the date in YYYY-MM-DD format. For example: 2025-12-22"
                     state["current_question"] = "return_date"
                     print(f"   💬 Asking: {response}")
-                elif "travelers" in missing:
-                    response = "How many travelers are going, and what are their ages? For example: '2 travelers, ages 30 and 8'"
+                elif any(x in missing for x in ["travelers", "traveler ages", "number of adults"]):
+                    response = f"{acknowledgment}How many travelers are going, and what are their ages? For example: '2 travelers, ages 30 and 8'"
                     state["current_question"] = "travelers"
                     print(f"   💬 Asking: {response}")
-            elif all_required_present and not state.get("awaiting_confirmation"):
-                print(f"   🔍 Branch: Going to confirmation")
-                # All info collected, show summary and ask for confirmation
-                # Set default for adventure_sports before showing confirmation if not answered yet
-                if "adventure_sports" not in prefs or prefs.get("adventure_sports") is None:
-                    prefs["adventure_sports"] = False
-                
-                dest = trip["destination"]
-                dep_date = trip["departure_date"]
-                ret_date = trip["return_date"]
-                duration_days = (ret_date - dep_date).days + 1
-                
-                dep_formatted = dep_date.strftime("%B %d, %Y")
-                ret_formatted = ret_date.strftime("%B %d, %Y")
-                ages = ", ".join(map(str, travelers["ages"]))
-                adv = "Yes" if prefs.get("adventure_sports") else "No"
-                
-                response = f"""Let me confirm your trip details:
-
-📍 Destination: {dest}
-📅 Travel dates: {dep_formatted} to {ret_formatted} ({duration_days} days)
-👥 Travelers: {len(travelers['ages'])} traveler(s) (ages: {ages})
-🏔️ Adventure activities: {adv}
-
-Is this information correct? (yes/no)"""
-                
-                state["awaiting_confirmation"] = True
-                state["current_question"] = "confirmation"
-                print(f"   💬 Asking for confirmation")
+                else:
+                    # Fallback if missing list has items we don't recognize
+                    response = f"{acknowledgment}I need a bit more information. Could you tell me about your travelers?"
+                    state["current_question"] = "travelers"
+                    print(f"   ⚠️  Unrecognized missing items: {missing}, defaulting to travelers question")
+            # NOTE: This elif branch is REMOVED - confirmation card logic moved to line 962
+            # This prevents duplicate/conflicting confirmation card generation
             else:
                 # Shouldn't reach here, but handle gracefully
                 response = "I have all the information I need. Let me calculate your quote..."
@@ -727,7 +1039,10 @@ Is this information correct? (yes/no)"""
             return state
             
         except Exception as e:
-            # Error handling with friendly message
+            # Error handling with friendly message and logging
+            import traceback
+            print(f"❌ Error in needs_assessment: {e}")
+            print(f"   Traceback: {traceback.format_exc()}")
             response = "I'm having trouble processing that. Could you please rephrase?"
             state["messages"].append(AIMessage(content=response))
             return state
@@ -753,15 +1068,34 @@ Is this information correct? (yes/no)"""
     def pricing(state: ConversationState) -> ConversationState:
         """Calculate and present insurance quotes with tiered pricing."""
         try:
-            trip = state["trip_details"]
-            travelers = state["travelers_data"]
-            prefs = state["preferences"]
+            trip = state.get("trip_details", {})
+            travelers = state.get("travelers_data", {})
+            prefs = state.get("preferences", {})
             
-            # Extract required data
-            destination = trip["destination"]
-            departure_date = trip["departure_date"]
-            return_date = trip["return_date"]
-            travelers_ages = travelers["ages"]
+            # Extract required data with validation
+            destination = trip.get("destination")
+            departure_date = trip.get("departure_date")
+            return_date = trip.get("return_date")
+            travelers_ages = travelers.get("ages", [])
+            
+            # Validate required fields
+            if not destination:
+                response = "I need your destination to calculate a quote. Where are you traveling to?"
+                state["messages"].append(AIMessage(content=response))
+                state["current_question"] = "destination"
+                return state
+            
+            if not departure_date or not return_date:
+                response = "I need your travel dates to calculate a quote. When are you traveling?"
+                state["messages"].append(AIMessage(content=response))
+                state["current_question"] = "departure_date"
+                return state
+            
+            if not travelers_ages:
+                response = "I need the ages of all travelers to calculate a quote. How many travelers and what are their ages?"
+                state["messages"].append(AIMessage(content=response))
+                state["current_question"] = "travelers"
+                return state
             
             # Default to False if user never answered or is None
             adventure_sports = prefs.get("adventure_sports", False)
@@ -806,25 +1140,150 @@ Is this information correct? (yes/no)"""
             )
             
             if not quote_result["success"]:
-                # Error in quote calculation - provide friendly error message
+                # Error in quote calculation - try fallback pricing
                 error_msg = quote_result.get("error", "Unknown error")
-                if "182 days" in error_msg:
-                    response = "Your trip is a bit too long for our standard coverage (maximum 182 days). Let me connect you with a specialist who can help with extended coverage."
-                elif "age" in error_msg.lower():
-                    response = "I noticed one of the ages might not be quite right. Travelers should be between 1 month and 110 years old. Could you double-check the ages?"
-                else:
-                    response = f"I'm sorry, but I encountered an issue: {error_msg}. Let me connect you with a human agent who can help."
+                print(f"   ⚠️  Pricing service failed: {error_msg}")
                 
-                state["requires_human"] = True
-                state["messages"].append(AIMessage(content=response))
-                return state
+                # Check if we have area and base_rate for fallback pricing
+                area = trip.get("area")
+                base_rate = trip.get("base_rate")
+                
+                if area and base_rate:
+                    print(f"   🔄 Attempting fallback pricing using area={area}, base_rate={base_rate}")
+                    # Calculate fallback quotes using base_rate and multipliers
+                    from datetime import timedelta
+                    # Handle date strings or date objects
+                    if isinstance(departure_date, str):
+                        departure_date_obj = parse_date_safe(departure_date)
+                        if not departure_date_obj:
+                            raise ValueError(f"Invalid departure date format: {departure_date}")
+                    else:
+                        departure_date_obj = departure_date
+                    if isinstance(return_date, str):
+                        return_date_obj = parse_date_safe(return_date)
+                        if not return_date_obj:
+                            raise ValueError(f"Invalid return date format: {return_date}")
+                    else:
+                        return_date_obj = return_date
+                    
+                    if not departure_date_obj or not return_date_obj:
+                        raise ValueError("Invalid dates provided")
+                    duration = (return_date_obj - departure_date_obj).days + 1
+                    num_travelers = len(travelers_ages)
+                    
+                    # Calculate base price per traveler per day
+                    base_price = base_rate * duration * num_travelers
+                    
+                    # Tier multipliers (matching PricingService)
+                    standard_price = round(base_price * 1.0, 2)
+                    elite_price = round(base_price * 1.2, 2)
+                    premier_price = round(base_price * 1.5, 2)
+                    
+                    # Default coverage amounts (reasonable estimates)
+                    coverage_standard = {
+                        "medical_coverage": 50000,
+                        "trip_cancellation": 10000,
+                        "baggage_loss": 3000,
+                        "personal_accident": 25000
+                    }
+                    coverage_elite = {
+                        "medical_coverage": 100000,
+                        "trip_cancellation": 20000,
+                        "baggage_loss": 5000,
+                        "personal_accident": 50000,
+                        "adventure_sports": True
+                    }
+                    coverage_premier = {
+                        "medical_coverage": 200000,
+                        "trip_cancellation": 50000,
+                        "baggage_loss": 10000,
+                        "personal_accident": 100000,
+                        "adventure_sports": True,
+                        "emergency_evacuation": 500000
+                    }
+                    
+                    # Build fallback quote_result
+                    quotes = {}
+                    quotes["standard"] = {
+                        "tier": "standard",
+                        "price": standard_price,
+                        "currency": "SGD",
+                        "coverage": coverage_standard,
+                        "breakdown": {
+                            "duration_days": duration,
+                            "travelers_count": num_travelers,
+                            "area": area,
+                            "source": "fallback_calculation"
+                        }
+                    }
+                    quotes["elite"] = {
+                        "tier": "elite",
+                        "price": elite_price,
+                        "currency": "SGD",
+                        "coverage": coverage_elite,
+                        "breakdown": {
+                            "duration_days": duration,
+                            "travelers_count": num_travelers,
+                            "area": area,
+                            "source": "fallback_calculation"
+                        }
+                    }
+                    quotes["premier"] = {
+                        "tier": "premier",
+                        "price": premier_price,
+                        "currency": "SGD",
+                        "coverage": coverage_premier,
+                        "breakdown": {
+                            "duration_days": duration,
+                            "travelers_count": num_travelers,
+                            "area": area,
+                            "source": "fallback_calculation"
+                        }
+                    }
+                    
+                    # Ensure dates are in correct format for JSON serialization
+                    dep_date_str = departure_date_obj.isoformat() if isinstance(departure_date_obj, date) else str(departure_date_obj)
+                    ret_date_str = return_date_obj.isoformat() if isinstance(return_date_obj, date) else str(return_date_obj)
+                    
+                    quote_result = {
+                        "success": True,
+                        "destination": destination,
+                        "area": area,
+                        "departure_date": dep_date_str,
+                        "return_date": ret_date_str,
+                        "duration_days": duration,
+                        "travelers_count": num_travelers,
+                        "adventure_sports": adventure_sports,
+                        "quotes": quotes,
+                        "ancileo_reference": None,  # No Ancileo reference for fallback
+                        "recommended_tier": "elite" if adventure_sports else "standard",
+                        "fallback": True  # Flag to indicate this is a fallback quote
+                    }
+                    print(f"   ✅ Fallback pricing calculated successfully")
+                else:
+                    # No fallback possible - need human help
+                    if "182 days" in error_msg:
+                        response = "Your trip is a bit too long for our standard coverage (maximum 182 days). Let me connect you with a specialist who can help with extended coverage."
+                    elif "age" in error_msg.lower():
+                        response = "I noticed one of the ages might not be quite right. Travelers should be between 1 month and 110 years old. Could you double-check the ages?"
+                    else:
+                        response = f"I'm sorry, but I encountered an issue calculating your quote. Let me connect you with a human agent who can help."
+                    
+                    state["requires_human"] = True
+                    state["messages"].append(AIMessage(content=response))
+                    return state
             
             # Store full quote result
             state["quote_data"] = quote_result
 
-            # Update trip in database with total_cost (price range)
-            if state.get("trip_id"):
+            # Build and store JSON structures for quote records
+            if state.get("trip_id") and state.get("user_id"):
                 try:
+                    from app.services.json_builders import build_ancileo_quotation_json, build_ancileo_purchase_json
+                    from app.models.user import User
+                    from app.models.quote import Quote, QuoteStatus, ProductType
+                    from decimal import Decimal
+                    
                     existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
                     if existing_trip:
                         quotes = quote_result["quotes"]
@@ -840,10 +1299,86 @@ Is this information correct? (yes/no)"""
                             min_price = min(prices)
                             max_price = max(prices)
                             existing_trip.total_cost = f"SGD {min_price:.2f} - SGD {max_price:.2f}"
+                        
+                        # Build Ancileo JSON structures
+                        user = db.query(User).filter(User.id == uuid.UUID(state["user_id"])).first()
+                        # Parse name field (User model has single 'name' field, not first_name/last_name)
+                        if user and user.name:
+                            name_parts = user.name.split(' ', 1)
+                            first_name = name_parts[0]
+                            last_name = name_parts[1] if len(name_parts) > 1 else ""
+                        else:
+                            first_name = ""
+                            last_name = ""
+
+                        user_data = {
+                            "first_name": first_name,
+                            "last_name": last_name,
+                            "email": user.email if user else ""
+                        }
+                        
+                        # Build quotation JSON
+                        ancileo_quotation_json = build_ancileo_quotation_json(
+                            trip_details=trip,
+                            travelers_data=travelers,
+                            preferences=prefs
+                        )
+                        
+                        # Build purchase JSON
+                        ancileo_purchase_json = build_ancileo_purchase_json(
+                            user_data=user_data,
+                            travelers_data=travelers
+                        )
+                        
+                        # Create or update Quote record with JSON structures
+                        # Check if quote already exists for this trip
+                        existing_quote = db.query(Quote).filter(
+                            Quote.trip_id == uuid.UUID(state["trip_id"]),
+                            Quote.user_id == uuid.UUID(state["user_id"])
+                        ).first()
+                        
+                        if existing_quote:
+                            # Update existing quote with JSON structures and price range
+                            existing_quote.ancileo_quotation_json = ancileo_quotation_json
+                            existing_quote.ancileo_purchase_json = ancileo_purchase_json
+                            existing_quote.price_min = Decimal(str(min_price)) if prices else None
+                            existing_quote.price_max = Decimal(str(max_price)) if prices else None
+                            existing_quote.status = QuoteStatus.RANGED
+                            existing_quote.currency = "SGD"
                             db.commit()
-                            print(f"   ✅ Updated trip total_cost: {existing_trip.total_cost}")
+                            print(f"   ✅ Updated existing quote with JSON structures: {existing_quote.id}")
+                        else:
+                            # Create new quote record
+                            travelers_list = [{"age": age} for age in travelers_ages]
+                            activities_list = [{"type": "general"}]
+                            if adventure_sports:
+                                activities_list.append({"type": "adventure_sports"})
+                            
+                            new_quote = Quote(
+                                user_id=uuid.UUID(state["user_id"]),
+                                trip_id=uuid.UUID(state["trip_id"]),
+                                product_type=ProductType.SINGLE,
+                                selected_tier="standard",  # Default, user selects later
+                                travelers=travelers_list,
+                                activities=activities_list,
+                                price_min=Decimal(str(min_price)) if prices else None,
+                                price_max=Decimal(str(max_price)) if prices else None,
+                                currency="SGD",
+                                status=QuoteStatus.RANGED,
+                                ancileo_quotation_json=ancileo_quotation_json,
+                                ancileo_purchase_json=ancileo_purchase_json
+                            )
+                            db.add(new_quote)
+                            db.commit()
+                            db.refresh(new_quote)
+                            print(f"   ✅ Created quote with JSON structures: {new_quote.id}")
+                        
+                        db.commit()
+                        print(f"   ✅ Updated trip total_cost: {existing_trip.total_cost}")
                 except Exception as e:
-                    print(f"   ⚠️  Failed to update trip total_cost: {e}")
+                    import traceback
+                    print(f"   ⚠️  Failed to create/update quote with JSON structures: {e}")
+                    traceback.print_exc()
 
             # Format a beautiful response with all tiers
             quotes = quote_result["quotes"]
@@ -886,6 +1421,10 @@ Is this information correct? (yes/no)"""
             
             response_parts.append("\nAll prices are in Singapore Dollars (SGD). Would you like more details about any plan?")
             
+            # Add note if using fallback pricing
+            if quote_result.get("fallback"):
+                response_parts.append("\n\n⚠️ *Note: Quote calculated using estimated pricing. Our pricing service is temporarily unavailable, but these estimates should give you a good idea of costs.*")
+            
             # Add risk narrative if available
             if state.get("risk_narrative"):
                 response_parts.append(f"\n\n📊 **Risk Analysis:**\n{state['risk_narrative']}")
@@ -908,6 +1447,9 @@ Is this information correct? (yes/no)"""
             return state
             
         except Exception as e:
+            import traceback
+            print(f"❌ Error in pricing node: {e}")
+            traceback.print_exc()
             response = "I encountered an error calculating your quote. Let me connect you with a human agent."
             state["requires_human"] = True
             state["messages"].append(AIMessage(content=response))
@@ -1027,6 +1569,40 @@ Is this information correct? (yes/no)"""
                     if state.get("preferences", {}).get("adventure_sports"):
                         activities_list.append({"type": "adventure_sports"})
                     
+                    # Build Ancileo JSON structures
+                    from app.services.json_builders import build_ancileo_quotation_json, build_ancileo_purchase_json
+                    from app.models.user import User
+
+                    # Get user data for purchase JSON
+                    user = db.query(User).filter(User.id == uuid.UUID(user_id)).first()
+                    # Parse name field (User model has single 'name' field, not first_name/last_name)
+                    if user and user.name:
+                        name_parts = user.name.split(' ', 1)
+                        first_name = name_parts[0]
+                        last_name = name_parts[1] if len(name_parts) > 1 else ""
+                    else:
+                        first_name = ""
+                        last_name = ""
+
+                    user_data = {
+                        "first_name": first_name,
+                        "last_name": last_name,
+                        "email": user.email if user else ""
+                    }
+                    
+                    # Build quotation JSON
+                    ancileo_quotation_json = build_ancileo_quotation_json(
+                        trip_details=trip_details,
+                        travelers_data=travelers_data,
+                        preferences=state.get("preferences", {})
+                    )
+                    
+                    # Build purchase JSON
+                    ancileo_purchase_json = build_ancileo_purchase_json(
+                        user_data=user_data,
+                        travelers_data=travelers_data
+                    )
+                    
                     quote = Quote(
                         user_id=uuid.UUID(user_id),
                         trip_id=uuid.UUID(trip_id),
@@ -1040,7 +1616,9 @@ Is this information correct? (yes/no)"""
                             "tier": tier,
                             "coverage": coverage,
                             "price": price
-                        }
+                        },
+                        ancileo_quotation_json=ancileo_quotation_json,
+                        ancileo_purchase_json=ancileo_purchase_json
                     )
                     db.add(quote)
                     db.commit()
@@ -1075,9 +1653,10 @@ Is this information correct? (yes/no)"""
                     # Store payment info in state
                     state["_payment_intent_id"] = payment_intent_id
                     state["_awaiting_payment_confirmation"] = True
-                    
+                    state["_checkout_url_sent"] = True  # Flag to prevent re-entry
+
                     response = f"Great! I've set up your payment for the **{tier.title()}** plan (${price:.2f} SGD).\n\nPlease complete your payment at:\n{checkout_url}\n\nI'll wait here and confirm once payment is successful. This usually takes 10-30 seconds after you complete the payment."
-                
+
                 state["messages"].append(AIMessage(content=response))
             
             return state
@@ -1086,98 +1665,150 @@ Is this information correct? (yes/no)"""
             print(f"   ⚠️  Payment processor error: {e}")
             import traceback
             traceback.print_exc()
-            response = "I encountered an error processing the payment. Let me connect you with a human agent."
+            # Mark that payment processing failed to prevent recursion
+            state["_payment_failed"] = True
             state["requires_human"] = True
+            response = "I encountered an error processing the payment. Let me connect you with a human agent."
             state["messages"].append(AIMessage(content=response))
             return state
     
     def policy_explainer(state: ConversationState) -> ConversationState:
         """
-        Answer policy questions using mock policy knowledge base.
+        Answer policy questions with context-aware responses using RAG and user context.
+        
+        This node:
+        1. Retrieves user's policy/tier context from database
+        2. Searches policy documents using RAG
+        3. Generates personalized response using Groq LLM
+        4. Includes specific coverage amounts for user's tier
         """
         
-        print("\n📚 POLICY EXPLAINER NODE")
+        print("\n📚 POLICY EXPLAINER NODE (Context-Aware)")
         
         messages = state.get("messages", [])
         last_message = messages[-1]
         user_question = last_message.content if hasattr(last_message, 'content') else str(last_message)
+        user_id = state.get("user_id")
         
         print(f"   Question: {user_question[:100]}...")
         
-        # Mock policy knowledge base (replace with real RAG later)
-        policy_kb = {
-            "medical": {
-                "coverage": "Medical coverage includes emergency medical treatment, hospitalization, and medical evacuation up to policy limits.",
-                "limits": "Standard: $50,000 | Elite: $100,000 | Premier: $200,000",
-                "exclusions": "Pre-existing conditions (unless declared), cosmetic procedures, routine checkups"
-            },
-            "cancellation": {
-                "coverage": "Trip cancellation covers non-refundable expenses if you must cancel due to covered reasons.",
-                "reasons": "Serious illness, injury, death of traveler/family, natural disasters, travel warnings",
-                "limits": "Standard: $5,000 | Elite: $10,000 | Premier: $15,000"
-            },
-            "baggage": {
-                "coverage": "Baggage coverage includes loss, theft, or damage to personal belongings.",
-                "limits": "Standard: $3,000 | Elite: $5,000 | Premier: $10,000",
-                "exclusions": "Cash, jewelry over $500, electronics over $1,000 (unless declared)"
-            },
-            "adventure": {
-                "coverage": "Adventure sports coverage available in Elite and Premier plans.",
-                "included": "Skiing, scuba diving (certified), hiking, zip-lining",
-                "excluded": "Base jumping, solo climbing, motor sports",
-                "requirement": "Must select Elite or Premier plan and declare activities"
-            },
-            "pre-existing": {
-                "coverage": "Pre-existing conditions can be covered if declared and accepted.",
-                "process": "Declare conditions during application, underwriting review, additional premium may apply",
-                "exclusions": "Conditions not declared, terminal illnesses, ongoing treatment required"
-            }
-        }
+        # Get user's policy/tier context
+        from app.agents.tools import get_user_policy_context
+        user_context = get_user_policy_context(user_id, db)
         
-        # Simple keyword matching to find relevant policy section
-        question_lower = user_question.lower()
+        print(f"   User context: has_policy={user_context.get('has_policy')}, tier={user_context.get('tier')}")
         
-        relevant_sections = []
+        # Search policy documents using RAG
+        from app.services.rag import RAGService
+        rag_service = RAGService(db=db)
         
-        if any(word in question_lower for word in ["medical", "hospital", "doctor", "treatment", "sick", "injured"]):
-            relevant_sections.append(("Medical Coverage", policy_kb["medical"]))
+        try:
+            # Search with tier filter if user has selected a tier
+            search_results = rag_service.search(
+                query=user_question,
+                limit=3,
+                tier=user_context.get("tier") if user_context.get("tier") else None
+            )
+            print(f"   Found {len(search_results)} relevant policy sections")
+        except Exception as e:
+            print(f"   ⚠️  RAG search failed: {e}")
+            search_results = []
         
-        if any(word in question_lower for word in ["cancel", "cancellation", "refund", "can't go"]):
-            relevant_sections.append(("Trip Cancellation", policy_kb["cancellation"]))
+        # Format context for LLM
+        if user_context.get("has_policy"):
+            # User has purchased policy - be specific about their coverage
+            tier_display = user_context['tier'].title() if user_context.get('tier') else "Unknown"
+            context_prompt = f"""User has an ACTIVE policy:
+- Tier: {tier_display}
+- Policy Number: {user_context['policy_number']}
+- Coverage Period: {user_context['effective_date']} to {user_context['expiry_date']}
+- Destination: {user_context['destination']}
+- Travelers: {len(user_context.get('travelers', []))} person(s)
+- Medical Coverage: ${user_context['coverage'].get('medical_coverage', 'N/A'):,}
+- Trip Cancellation: ${user_context['coverage'].get('trip_cancellation', 'N/A'):,}
+- Baggage Protection: ${user_context['coverage'].get('baggage_loss', 'N/A'):,}
+- Adventure Sports: {'Yes' if user_context['coverage'].get('adventure_sports') else 'No'}
+
+Answer their question SPECIFICALLY about THEIR {tier_display} policy."""
         
-        if any(word in question_lower for word in ["bag", "luggage", "lost", "stolen", "damage"]):
-            relevant_sections.append(("Baggage Coverage", policy_kb["baggage"]))
+        elif user_context.get("tier"):
+            # User has selected a tier but not purchased yet
+            tier_display = user_context['tier'].title()
+            context_prompt = f"""User is considering the {tier_display} plan.
+Provide information about this tier and compare with other tiers if relevant."""
         
-        if any(word in question_lower for word in ["adventure", "sport", "ski", "dive", "scuba", "hiking"]):
-            relevant_sections.append(("Adventure Sports", policy_kb["adventure"]))
-        
-        if any(word in question_lower for word in ["pre-existing", "condition", "medical history"]):
-            relevant_sections.append(("Pre-existing Conditions", policy_kb["pre-existing"]))
-        
-        # Build response
-        if relevant_sections:
-            response = "Based on our policy:\n\n"
-            for section_name, section_data in relevant_sections:
-                response += f"**{section_name}:**\n"
-                for key, value in section_data.items():
-                    response += f"• {key.title()}: {value}\n"
-                response += "\n"
-            response += "Do you have any other questions about coverage?"
         else:
-            response = """I can help explain our travel insurance policy. Here are common topics:
-
-- **Medical Coverage** - Emergency treatment and hospitalization
-- **Trip Cancellation** - Non-refundable expenses if you must cancel
-- **Baggage** - Lost, stolen, or damaged belongings
-- **Adventure Sports** - Coverage for activities (Elite/Premier plans)
-- **Pre-existing Conditions** - How we handle medical history
-
-What would you like to know more about?"""
+            # User hasn't selected a tier yet - provide general comparison
+            context_prompt = """User hasn't selected a tier yet. Provide general policy information and highlight differences between Standard, Elite, and Premier tiers."""
         
-        state["messages"].append(AIMessage(content=response))
+        # Format RAG results
+        rag_context = ""
+        if search_results:
+            rag_context = "\n\nRelevant Policy Sections:\n\n"
+            for i, result in enumerate(search_results, 1):
+                pages_str = ', '.join(map(str, result.get('pages', [])))
+                rag_context += f"""[{i}] {result['section_id']}: {result['heading']}
+(From {result['title']}, Page {pages_str}, Similarity: {result['similarity']:.2f})
+
+{result['text'][:500]}...
+
+---
+
+"""
+        
+        # Generate response using Groq LLM
+        from app.agents.llm_client import get_llm
+        llm = get_llm()
+        
+        system_prompt = f"""You are a helpful travel insurance policy expert. 
+
+{context_prompt}
+
+{rag_context}
+
+Guidelines:
+1. Be specific and direct - cite exact coverage amounts
+2. Use the policy sections provided above for accurate information
+3. If user has a policy, personalize the answer to THEIR coverage
+4. Use bullet points for clarity
+5. Include citations like "[Section 6: Medical Coverage]"
+6. If asked about exclusions, be clear about what's NOT covered
+7. If information isn't in the provided sections, say so clearly
+
+Format your response with:
+- Clear answer to their question
+- Specific coverage amounts (if applicable)
+- Relevant exclusions or conditions
+- Citation to policy sections"""
+
+        try:
+            response_obj = llm.invoke([
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_question}
+            ])
+            
+            response_text = response_obj.content
+            
+            # Add helpful footer if user has policy
+            if user_context.get("has_policy"):
+                response_text += f"\n\n---\n📋 Your Policy: {user_context['policy_number']}\n📅 Valid: {user_context['effective_date']} to {user_context['expiry_date']}"
+            
+        except Exception as e:
+            print(f"   ⚠️  LLM generation failed: {e}")
+            # Fallback response
+            if search_results:
+                response_text = "Based on the policy documents:\n\n"
+                for result in search_results[:2]:
+                    response_text += f"**{result['heading']}** (Section {result['section_id']})\n{result['text'][:300]}...\n\n"
+            else:
+                response_text = "I couldn't find specific information in our policy documents. Please contact customer service for detailed assistance."
+        
+        # Update state
+        messages.append(AIMessage(content=response_text))
+        state["messages"] = messages
         state["policy_question"] = user_question
         
-        print(f"   ✅ Answered with {len(relevant_sections)} relevant sections")
+        print(f"   ✅ Generated {len(response_text)} character response")
         
         return state
     
@@ -1236,10 +1867,18 @@ What would you like to know more about?"""
             # Initialize policy recommender
             policy_recommender = PolicyRecommender()
             
-            # Update state with extracted information based on document type
-            trip = state.get("trip_details", {})
-            travelers = state.get("travelers_data", {})
-            prefs = state.get("preferences", {})
+            # CRITICAL: Get direct references to dictionaries, not copies
+            # This ensures changes persist in state
+            if "trip_details" not in state:
+                state["trip_details"] = {}
+            if "travelers_data" not in state:
+                state["travelers_data"] = {}
+            if "preferences" not in state:
+                state["preferences"] = {}
+            
+            trip = state["trip_details"]  # Direct reference, not .get() copy
+            travelers = state["travelers_data"]  # Direct reference
+            prefs = state["preferences"]  # Direct reference
             
             extracted_items = []
             doc_type = extracted_json.get("document_type", "unknown")
@@ -1257,17 +1896,25 @@ What would you like to know more about?"""
                 if flight_details:
                     departure = flight_details.get("departure") or {}
                     if departure and departure.get("date"):
-                        parsed_date = parse_date_safe(departure["date"])
+                        dep_date_str = departure["date"]
+                        parsed_date = parse_date_safe(dep_date_str)
                         if parsed_date:
                             trip["departure_date"] = parsed_date
                             extracted_items.append(f"departure date: {parsed_date}")
+                            print(f"   ✅ Extracted and stored departure_date: {parsed_date} (from: {dep_date_str})")
+                        else:
+                            print(f"   ⚠️  Failed to parse departure_date: {dep_date_str}")
                     
                     return_flight = flight_details.get("return") or {}
                     if return_flight and return_flight.get("date"):
-                        parsed_date = parse_date_safe(return_flight["date"])
+                        ret_date_str = return_flight["date"]
+                        parsed_date = parse_date_safe(ret_date_str)
                         if parsed_date:
                             trip["return_date"] = parsed_date
                             extracted_items.append(f"return date: {parsed_date}")
+                            print(f"   ✅ Extracted and stored return_date: {parsed_date} (from: {ret_date_str})")
+                        else:
+                            print(f"   ⚠️  Failed to parse return_date: {ret_date_str}")
                 
                 flight_travelers = extracted_json.get("travelers", [])
                 if flight_travelers:
@@ -1362,14 +2009,93 @@ What would you like to know more about?"""
             # Note: We're using structured JSON from OCR service, so no need for LLM fallback
             # The JSON extractor already handles all document types with high accuracy
             
-            state["trip_details"] = trip
+            # Extract Ancileo API required fields
+            # Departure country: Default to Singapore (SG market)
+            if not trip.get("departure_country"):
+                trip["departure_country"] = "SG"
+            
+            # Arrival country: Extract from destination using GeoMapper
+            if trip.get("destination") and not trip.get("arrival_country"):
+                try:
+                    arrival_country_iso = GeoMapper.get_country_iso_code(trip["destination"])
+                    trip["arrival_country"] = arrival_country_iso
+                    print(f"   ✅ Extracted arrival_country: {arrival_country_iso} from destination: {trip['destination']}")
+                except ValueError as e:
+                    print(f"   ⚠️  Could not convert destination '{trip['destination']}' to ISO code: {e}")
+                    # Will need to ask user for clarification
+            
+            # Adults and children count: Calculate from travelers ages
+            if travelers.get("ages"):
+                ages = travelers["ages"]
+                adults_count = sum(1 for age in ages if age >= 18)
+                children_count = sum(1 for age in ages if age < 18)
+                # Ensure at least 1 adult for Ancileo API
+                if adults_count == 0 and children_count > 0:
+                    adults_count = 1
+                    children_count = max(0, children_count - 1)
+                trip["adults_count"] = adults_count
+                trip["children_count"] = children_count
+                print(f"   ✅ Calculated adults_count: {adults_count}, children_count: {children_count}")
+            elif travelers.get("count"):
+                # If we have count but no ages, assume all adults (will need to ask for ages)
+                trip["adults_count"] = travelers["count"]
+                trip["children_count"] = 0
+                print(f"   ⚠️  Using travelers count as adults_count: {travelers['count']} (ages needed)")
+            
+            # CRITICAL: Ensure state references are updated (trip, travelers, prefs are already references)
+            # Since trip/travelers/prefs are direct references to state dicts, just ensure they're set
+            state["trip_details"] = trip  # Already a reference, just ensure it's in state
             state["travelers_data"] = travelers
             state["preferences"] = prefs
+            
+            # Debug: Print what was extracted and stored
+            print(f"   📊 After extraction - trip: destination={trip.get('destination')}, dep_date={trip.get('departure_date')}, ret_date={trip.get('return_date')}")
+            print(f"   📊 After extraction - travelers: ages={travelers.get('ages')}, count={travelers.get('count')}")
+            print(f"   📊 State trip_details after setting: destination={state['trip_details'].get('destination')}, dep_date={state['trip_details'].get('departure_date')}, ret_date={state['trip_details'].get('return_date')}")
+            
+            # Set flag to route to needs_assessment after document processing
+            state["_document_processed"] = True
             
             # Store extracted JSON in state for reference
             if "ocr_results" not in state:
                 state["ocr_results"] = []
             state["ocr_results"].append(extracted_json)
+            
+            # Update trip metadata_json with document reference
+            if state.get("trip_id") and state.get("session_id"):
+                try:
+                    from app.services.json_builders import build_trip_metadata_json
+                    from datetime import datetime
+                    from app.models.trip import Trip
+                    
+                    trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
+                    if trip:
+                        # Get existing metadata or create new
+                        existing_metadata = trip.metadata_json or {}
+                        
+                        # Build document reference
+                        doc_ref = {
+                            "document_type": doc_type,
+                            "filename": latest_doc.get("filename"),
+                            "extracted_at": datetime.now().isoformat()
+                        }
+                        
+                        # Add to document_references
+                        if "document_references" not in existing_metadata:
+                            existing_metadata["document_references"] = []
+                        existing_metadata["document_references"].append(doc_ref)
+                        
+                        # Update conversation_flow
+                        if "conversation_flow" not in existing_metadata:
+                            existing_metadata["conversation_flow"] = {}
+                        if "document_uploaded_at" not in existing_metadata["conversation_flow"]:
+                            existing_metadata["conversation_flow"]["document_uploaded_at"] = datetime.now().isoformat()
+                        
+                        trip.metadata_json = existing_metadata
+                        db.commit()
+                        print(f"   ✅ Updated trip metadata_json with document reference")
+                except Exception as e:
+                    print(f"   ⚠️  Failed to update trip metadata_json: {e}")
             
             # Build confirmation response
             if extracted_items:
@@ -1386,11 +2112,28 @@ What would you like to know more about?"""
                     if low_conf_fields:
                         response += f"\n• Medium confidence ({len(low_conf_fields)} fields): Please verify"
                 
-                response += "\n\n**Please confirm if these details are correct.** If everything looks good, I'll recommend the best insurance plan for your trip!"
+                # Check for missing Ancileo API required fields
+                missing_fields = []
+                if not trip.get("departure_date"):
+                    missing_fields.append("departure date")
+                if not trip.get("return_date"):
+                    missing_fields.append("return date")
+                if not trip.get("departure_country"):
+                    missing_fields.append("departure country")
+                if not trip.get("arrival_country"):
+                    missing_fields.append("destination country")
+                if not trip.get("adults_count") and not travelers.get("ages"):
+                    missing_fields.append("number of travelers (adults and children)")
+                elif not trip.get("adults_count"):
+                    missing_fields.append("number of adults")
                 
-                # Set awaiting confirmation flag
-                state["awaiting_confirmation"] = True
-                state["confirmation_type"] = "document_extraction"
+                if missing_fields:
+                    response += f"\n\nI still need a few more details to get you the best quote: {', '.join(missing_fields)}. Let me ask you about these now!"
+                else:
+                    response += "\n\n**Please confirm if these details are correct.** If everything looks good, I'll recommend the best insurance plan for your trip!"
+                    # Set awaiting confirmation flag only if all fields are present
+                    state["awaiting_confirmation"] = True
+                    state["confirmation_type"] = "document_extraction"
             else:
                 response = "I've processed your document. Could you clarify what specific information you'd like me to extract? For example, travel dates, destination, or traveler details?"
             
@@ -1591,38 +2334,55 @@ What would you like to know more about?"""
         quote_data = state.get("quote_data")
         intent = state.get("current_intent", "")
         
-        # Check for purchase intent (from LLM classification or keywords)
+        # Check for purchase intent (from LLM classification only - no hardcoded keyword matching)
         purchase_intent = (intent == "purchase")
-        
-        # Also check for purchase keywords if intent wasn't classified as purchase
-        if not purchase_intent:
-            messages = state.get("messages", [])
-            if messages:
-                last_msg = messages[-1]
-                user_input = last_msg.content.lower() if hasattr(last_msg, 'content') else str(last_msg).lower()
-                purchase_keywords = ["buy", "purchase", "checkout", "take it", "i'll take", "i want", "get", "proceed"]
-                purchase_intent = any(keyword in user_input for keyword in purchase_keywords)
-        
-        if awaiting_payment or (purchase_intent and quote_data and quote_data.get("quotes")):
+
+        # Prevent recursion: don't route to payment_processor if payment already failed or checkout URL already sent
+        payment_failed = state.get("_payment_failed", False)
+        checkout_url_sent = state.get("_checkout_url_sent", False)
+
+        # If we just sent the checkout URL, END to let user complete payment
+        if checkout_url_sent and awaiting_payment:
+            print(f"   → END (checkout URL sent, waiting for user to complete payment)")
+            log_conversation_metrics(state)
+            return END
+
+        if awaiting_payment or (purchase_intent and quote_data and quote_data.get("quotes") and not payment_failed):
             print(f"   → payment_processor")
             return "payment_processor"
         
         # Priority 3: If pricing is complete (but no purchase intent), END
-        if state.get("_pricing_complete", False):
-            print(f"   → END (pricing complete)")
+        # Only END if pricing complete AND no purchase intent detected
+        if state.get("_pricing_complete", False) and not purchase_intent:
+            print(f"   → END (pricing complete, no purchase intent)")
             log_conversation_metrics(state)
             return END
 
-        # Priority 4: Human handoff
-        if state.get("requires_human"):
-            print(f"   → customer_service")
-            return "customer_service"
-        
-        # Check if we're in an active quote flow first
-        # If user has confirmed and we're ready for pricing, prioritize quote flow over handoff
+        # Priority 4: Human handoff (but skip if in active quote flow with confirmation)
         confirmation_received = state.get("confirmation_received", False)
         ready_for_pricing = state.get("_ready_for_pricing", False)
         in_active_quote_flow = confirmation_received or ready_for_pricing or state.get("trip_details", {}).get("destination")
+        
+        if state.get("requires_human") and not in_active_quote_flow:
+            print(f"   → customer_service")
+            return "customer_service"
+        
+        # Priority 5: Non-quote intents
+        if intent == "policy_explanation":
+            pass  # Handle policy explanation
+        
+        # Priority 2: Check if we're in an active quote flow first
+        # (confirmation_received, ready_for_pricing, and in_active_quote_flow already set above)
+        
+        # Priority 4.5: After document processing, route to needs_assessment
+        document_processed = state.get("_document_processed", False)
+        if document_processed:
+            # Check if we're coming from process_document node
+            # Route to needs_assessment to collect missing Ancileo API fields
+            print(f"   → needs_assessment (document processed, collecting missing fields)")
+            # Clear the flag to prevent infinite loop
+            state["_document_processed"] = False
+            return "needs_assessment"
         
         # Priority 5: Non-quote intents
         if intent == "document_upload":
@@ -1648,7 +2408,9 @@ What would you like to know more about?"""
             current_question = state.get("current_question", "")
             awaiting_confirmation = state.get("awaiting_confirmation", False)
             has_area = state.get("trip_details", {}).get("area") is not None
-            has_quote = state.get("quote_data") is not None
+            # Check if quote_data actually has quotes (not just an empty dict)
+            quote_data = state.get("quote_data", {})
+            has_quote = bool(quote_data and quote_data.get("quotes"))
             
             print(f"   confirmed={confirmation_received}, ready={ready_for_pricing}")
             print(f"   area={has_area}, quote={has_quote}, complete={pricing_complete}")
@@ -1660,18 +2422,69 @@ What would you like to know more about?"""
                 log_conversation_metrics(state)
                 return END
             
-            # CRITICAL FIX: If we're waiting for user response, check if last message is from user
-            # If we asked a question AND the last message is from AI, END turn
-            # If we asked a question AND the last message is from user, process the answer
+            # CRITICAL FIX: If we're waiting for user response, check if last message is from AI
+            # If we asked a question AND the last message is from AI, END turn (waiting for user)
+            # If we asked a question AND the last message is from user, process the answer (continue)
+            # EXCEPTION: If we just confirmed but still have missing info, continue asking (don't END)
             messages = state.get("messages", [])
             if messages:
                 last_msg_is_ai = isinstance(messages[-1], AIMessage)
-                if (current_question or awaiting_confirmation) and last_msg_is_ai:
-                    print(f"   → END (waiting for user response)")
+                last_msg_content = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
+                
+                # Calculate all_required_present here (same logic as needs_assessment)
+                trip = state.get("trip_details", {})
+                travelers = state.get("travelers_data", {})
+                
+                # Handle dates - they might be date objects or strings
+                has_dep_date = bool(trip.get("departure_date"))
+                has_ret_date = bool(trip.get("return_date"))
+                has_travelers_info = bool(travelers.get("ages") or travelers.get("count") or trip.get("adults_count") is not None)
+                
+                all_required_present = (
+                    trip.get("destination") and
+                    has_dep_date and
+                    has_ret_date and
+                    has_travelers_info and
+                    trip.get("arrival_country") and
+                    trip.get("adults_count") is not None
+                )
+                
+                # Check if we just confirmed but still have missing info - continue asking
+                just_confirmed_with_missing = (
+                    confirmation_received and 
+                    last_msg_is_ai and 
+                    not all_required_present and
+                    "few more details" in last_msg_content.lower()
+                )
+                
+                # If we have a question pending and the last message is AI, we're done for this turn
+                # BUT: if we just confirmed with missing info, continue to ask next question (don't END)
+                if (current_question or awaiting_confirmation) and last_msg_is_ai and not just_confirmed_with_missing:
+                    print(f"   → END (waiting for user response, AI message just added)")
                     return END
+                # Also: if last message is AI and we're in quote flow but not actively processing, END
+                # BUT: if we just confirmed with missing info, continue (don't END)
+                if last_msg_is_ai and in_active_quote_flow and not awaiting_confirmation and not confirmation_received and not just_confirmed_with_missing:
+                    # End if we don't have a current question (meaning we just asked one or finished processing)
+                    if not current_question:
+                        print(f"   → END (AI response added, turn complete)")
+                        return END
+                # If we just confirmed with missing info, continue (don't END) - let needs_assessment ask next question
+                if just_confirmed_with_missing:
+                    print(f"   → Continue (just confirmed but missing info, will ask next question)")
+                    # Continue to needs_assessment to ask next missing question - don't return END, fall through
+            
+            # PRIORITY: If user just answered a question, process the answer first
+            # Check if we have a current_question AND the last message is from user (not AI)
+            if current_question and messages:
+                last_msg_is_user = not isinstance(messages[-1], AIMessage)
+                if last_msg_is_user:
+                    print(f"   → needs_assessment (user answered question: {current_question})")
+                    return "needs_assessment"
             
             # If confirmed and ready, proceed through pricing flow
-            if confirmation_received and ready_for_pricing:
+            # BUT: If pricing is already complete, don't route to pricing again
+            if confirmation_received and ready_for_pricing and not pricing_complete:
                 if not has_area:
                     print(f"   → risk_assessment")
                     return "risk_assessment"
@@ -1682,6 +2495,11 @@ What would you like to know more about?"""
                     print(f"   → END")
                     log_conversation_metrics(state)
                     return END
+            elif confirmation_received and ready_for_pricing and pricing_complete:
+                # Pricing already done, just END
+                print(f"   → END (pricing already complete)")
+                log_conversation_metrics(state)
+                return END
             
             # Otherwise, continue collecting info
             print(f"   → needs_assessment")

@@ -9,6 +9,7 @@ import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
 import { LogOut, Plus, MapPin, Calendar, Users, Plane, Loader2, Phone } from 'lucide-react'
+import { DocumentList } from '@/components/DocumentList'
 
 interface Trip {
   id: string
@@ -28,15 +29,28 @@ export default function DashboardPage() {
   const { user, logout } = useAuth()
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming')
+  const [activeTab, setActiveTab] = useState<'upcoming' | 'past' | 'documents'>('upcoming')
   const [error, setError] = useState('')
+  const [authToken, setAuthToken] = useState<string | null>(null)
   const [destinationImages, setDestinationImages] = useState<Record<string, string>>({})
-  const [imageLoadingStates, setImageLoadingStates] = useState<Record<string, boolean>>({})
-  const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({})
   const destinationImagesRef = useRef<Record<string, string>>({})
 
   useEffect(() => {
-    fetchTrips()
+    // Get auth token
+    const getAuthToken = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session) {
+        setAuthToken(session.access_token)
+      }
+    }
+    getAuthToken()
+  }, [])
+
+  useEffect(() => {
+    // Only fetch trips when not on documents tab
+    if (activeTab !== 'documents') {
+      fetchTrips()
+    }
   }, [activeTab])
 
   const sanitizeDestinationName = (destination: string): string => {
@@ -63,7 +77,6 @@ export default function DashboardPage() {
   }
 
   const fetchDestinationImages = useCallback(async () => {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
     const uniqueDestinations = new Set<string>()
     
     // Collect all unique destinations
@@ -82,25 +95,13 @@ export default function DashboardPage() {
       return // All images already loaded
     }
 
-    // Initialize loading states for destinations that need images
-    const loadingStates: Record<string, boolean> = {}
-    const errorStates: Record<string, boolean> = {}
-    destinationsToFetch.forEach(dest => {
-      loadingStates[dest] = true
-      errorStates[dest] = false
-    })
-    setImageLoadingStates(prev => ({ ...prev, ...loadingStates }))
-    setImageErrors(prev => ({ ...prev, ...errorStates }))
-
-    // First, check public directory for pre-generated images
+    // Only check public directory for pre-generated images (no API calls)
     const publicImageChecks = await Promise.all(
       destinationsToFetch.map(async (destination) => {
         const publicUrl = getPublicImageUrl(destination)
         if (publicUrl) {
           const exists = await checkImageExists(publicUrl)
           if (exists) {
-            setImageLoadingStates(prev => ({ ...prev, [destination]: false }))
-            setImageErrors(prev => ({ ...prev, [destination]: false }))
             return { destination, imageUrl: publicUrl }
           }
         }
@@ -108,48 +109,11 @@ export default function DashboardPage() {
       })
     )
 
-    // Filter out destinations that were found in public directory
-    const foundInPublic = publicImageChecks.filter(r => r !== null)
-    const remainingDestinations = destinationsToFetch.filter(
-      dest => !foundInPublic.some(f => f?.destination === dest)
-    )
-
-    // For remaining destinations, fetch from API with staggered delays
-    const apiResults = await Promise.all(
-      remainingDestinations.map(async (destination, index) => {
-        // Stagger requests by 15 seconds to avoid rate limits
-        if (index > 0) {
-          await new Promise(resolve => setTimeout(resolve, index * 15000))
-        }
-        
-        try {
-          const response = await fetch(`${backendUrl}/destination-images/${encodeURIComponent(destination)}`)
-          if (response.ok) {
-            const blob = await response.blob()
-            const imageUrl = URL.createObjectURL(blob)
-            setImageLoadingStates(prev => ({ ...prev, [destination]: false }))
-            setImageErrors(prev => ({ ...prev, [destination]: false }))
-            return { destination, imageUrl }
-          } else {
-            // Handle rate limit or other errors
-            setImageLoadingStates(prev => ({ ...prev, [destination]: false }))
-            setImageErrors(prev => ({ ...prev, [destination]: true }))
-            console.warn(`Failed to fetch image for ${destination}: ${response.status}`)
-          }
-        } catch (err) {
-          setImageLoadingStates(prev => ({ ...prev, [destination]: false }))
-          setImageErrors(prev => ({ ...prev, [destination]: true }))
-          console.error(`Failed to fetch image for ${destination}:`, err)
-        }
-        return null
-      })
-    )
-
-    // Combine public and API results
-    const allResults = [...foundInPublic, ...apiResults].filter(r => r !== null) as Array<{ destination: string; imageUrl: string }>
+    // Filter out null results
+    const foundImages = publicImageChecks.filter(r => r !== null) as Array<{ destination: string; imageUrl: string }>
 
     const imagesMap: Record<string, string> = {}
-    allResults.forEach(result => {
+    foundImages.forEach(result => {
       if (result) {
         imagesMap[result.destination] = result.imageUrl
       }
@@ -350,21 +314,45 @@ export default function DashboardPage() {
                 )}
               </span>
             </button>
+            <button
+              onClick={() => setActiveTab('documents')}
+              className={`pb-3 px-1 font-medium text-sm transition-colors relative ${
+                activeTab === 'documents'
+                  ? 'text-black'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Documents
+              {activeTab === 'documents' && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-black" />
+              )}
+            </button>
           </div>
 
           {/* Error Message */}
-          {error && (
+          {error && activeTab !== 'documents' && (
             <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg mb-6 text-sm">
               {error}
             </div>
           )}
 
-          {/* Loading State */}
-          {loading ? (
-            <div className="flex items-center justify-center py-16">
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-black"></div>
-            </div>
-          ) : displayTrips.length === 0 ? (
+          {/* Documents Tab Content */}
+          {activeTab === 'documents' ? (
+            authToken ? (
+              <DocumentList authToken={authToken} />
+            ) : (
+              <div className="flex items-center justify-center py-16">
+                <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-black"></div>
+              </div>
+            )
+          ) : (
+            <>
+              {/* Loading State */}
+              {loading ? (
+                <div className="flex items-center justify-center py-16">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-black"></div>
+                </div>
+              ) : displayTrips.length === 0 ? (
             /* Empty State */
             <div className="text-center py-16">
               <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
@@ -495,6 +483,8 @@ export default function DashboardPage() {
                 </Card>
               ))}
             </div>
+          )}
+            </>
           )}
         </main>
       </div>
