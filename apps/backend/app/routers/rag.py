@@ -23,7 +23,7 @@ async def search_documents(
 ):
     """Search policy documents."""
     
-    rag_service = RAGService()
+    rag_service = RAGService(db=db)
     
     search_request = RagSearchRequest(
         query=q,
@@ -45,7 +45,7 @@ async def ingest_document(
 ):
     """Ingest a policy document."""
     
-    rag_service = RAGService()
+    rag_service = RAGService(db=db)
     
     documents = rag_service.ingest_document(
         db,
