@@ -33,6 +33,113 @@ class GeoMapper:
         DestinationArea.AREA_C: 8.0,
     }
     
+    # Country name to ISO 2-letter code mapping (for Ancileo API)
+    COUNTRY_ISO_CODES: Dict[str, str] = {
+        # Singapore (departure country for SG market)
+        "singapore": "SG",
+        
+        # Area A - ASEAN countries
+        "brunei": "BN",
+        "cambodia": "KH",
+        "indonesia": "ID",
+        "laos": "LA",
+        "malaysia": "MY",
+        "myanmar": "MM",
+        "philippines": "PH",
+        "thailand": "TH",
+        "vietnam": "VN",
+        
+        # Area B - Asia-Pacific countries
+        "australia": "AU",
+        "china": "CN",
+        "hong kong": "HK",
+        "india": "IN",
+        "japan": "JP",
+        "korea": "KR",
+        "south korea": "KR",
+        "macau": "MO",
+        "new zealand": "NZ",
+        "sri lanka": "LK",
+        "taiwan": "TW",
+        
+        # Area C - Common worldwide destinations
+        "united states": "US",
+        "usa": "US",
+        "united kingdom": "GB",
+        "uk": "GB",
+        "canada": "CA",
+        "france": "FR",
+        "germany": "DE",
+        "italy": "IT",
+        "spain": "ES",
+        "switzerland": "CH",
+        "netherlands": "NL",
+        "belgium": "BE",
+        "austria": "AT",
+        "denmark": "DK",
+        "norway": "NO",
+        "sweden": "SE",
+        "finland": "FI",
+        "greece": "GR",
+        "portugal": "PT",
+        "ireland": "IE",
+        "poland": "PL",
+        "czech republic": "CZ",
+        "hungary": "HU",
+        "russia": "RU",
+        "turkey": "TR",
+        "united arab emirates": "AE",
+        "uae": "AE",
+        "dubai": "AE",
+        "saudi arabia": "SA",
+        "qatar": "QA",
+        "egypt": "EG",
+        "south africa": "ZA",
+        "kenya": "KE",
+        "morocco": "MA",
+        "brazil": "BR",
+        "argentina": "AR",
+        "chile": "CL",
+        "mexico": "MX",
+        "peru": "PE",
+        "colombia": "CO",
+        "iceland": "IS",
+        "croatia": "HR",
+        "romania": "RO",
+        "bulgaria": "BG",
+        "israel": "IL",
+        "jordan": "JO",
+        "lebanon": "LB",
+        "tunisia": "TN",
+        "ethiopia": "ET",
+        "tanzania": "TZ",
+        "zimbabwe": "ZW",
+        "botswana": "BW",
+        "namibia": "NA",
+        "jamaica": "JM",
+        "bahamas": "BS",
+        "barbados": "BB",
+        "costa rica": "CR",
+        "panama": "PA",
+        "uruguay": "UY",
+        "paraguay": "PY",
+        "venezuela": "VE",
+        "ecuador": "EC",
+        "bolivia": "BO",
+        "cuba": "CU",
+        "nepal": "NP",
+        "bangladesh": "BD",
+        "pakistan": "PK",
+        "maldives": "MV",
+        "seychelles": "SC",
+        "mauritius": "MU",
+        "fiji": "FJ",
+        "papua new guinea": "PG",
+        "samoa": "WS",
+        "tonga": "TO",
+        "vanuatu": "VU",
+    }
+    
     @classmethod
     def get_area(cls, destination: str) -> DestinationArea:
         """Get geographic area for destination.
@@ -88,5 +195,38 @@ class GeoMapper:
             "area": area,
             "base_rate": base_rate
         }
+    
+    @classmethod
+    def get_country_iso_code(cls, country_name: str) -> str:
+        """Convert country name to 2-letter ISO code.
+        
+        Used for Ancileo API which requires ISO country codes.
+        
+        Args:
+            country_name: Country name (case-insensitive)
+            
+        Returns:
+            2-letter ISO country code (uppercase)
+            
+        Raises:
+            ValueError: If country not found in mapping
+        """
+        normalized = country_name.lower().strip()
+        
+        iso_code = cls.COUNTRY_ISO_CODES.get(normalized)
+        
+        if not iso_code:
+            # Try partial matching for common variations
+            for country, code in cls.COUNTRY_ISO_CODES.items():
+                if normalized in country or country in normalized:
+                    return code
+            
+            # If still not found, raise error
+            raise ValueError(
+                f"Country '{country_name}' not found in ISO code mapping. "
+                f"Please add it to COUNTRY_ISO_CODES."
+            )
+        
+        return iso_code
 
 
