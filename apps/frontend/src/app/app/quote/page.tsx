@@ -13,6 +13,7 @@ import { FileAttachment } from '@/components/FileAttachment'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
+import { usePaymentPolling } from '@/hooks/usePaymentPolling'
 
 interface FileAttachmentData {
   filename: string
@@ -166,6 +167,7 @@ export default function QuotePage() {
   const [isUploading, setIsUploading] = useState(false)
   const [conversationState, setConversationState] = useState<ConversationState>({})
   const [selectedFile, setSelectedFile] = useState<File | null>(null) // File selected but not yet uploaded
+  const [awaitingPayment, setAwaitingPayment] = useState(false) // Track if waiting for payment completion
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -176,6 +178,27 @@ export default function QuotePage() {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  // Poll for payment completion and auto-refresh chat
+  usePaymentPolling({
+    sessionId: currentSessionId,
+    onPaymentComplete: async () => {
+      console.log('🎉 Payment completed! Reloading chat history...')
+      if (currentSessionId) {
+        await loadChatHistory(currentSessionId)
+        setAwaitingPayment(false)
+        // Optional: Show a success notification
+        const successMsg: Message = {
+          id: Date.now().toString(),
+          role: 'assistant',
+          content: '🎉 Payment confirmed! Your policy details are being loaded...',
+          timestamp: new Date()
+        }
+        setMessages(prev => [...prev, successMsg])
+      }
+    },
+    enabled: awaitingPayment
+  })
 
   // Parse plan information from message content
   const parsePlans = (content: string) => {
@@ -1064,7 +1087,14 @@ export default function QuotePage() {
               <div 
                 className="flex-1 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
               >
-                <CopilotPanel conversationState={conversationState} sessionId={currentSessionId || ''} />
+                <CopilotPanel 
+                  conversationState={conversationState} 
+                  sessionId={currentSessionId || ''}
+                  onPaymentStarted={() => {
+                    console.log('💳 Payment initiated, starting polling...')
+                    setAwaitingPayment(true)
+                  }}
+                />
               </div>
             </div>
           </div>
