@@ -27,6 +27,7 @@ interface Message {
   timestamp: Date
   extractedData?: any  // Extracted JSON data from OCR
   fileAttachment?: FileAttachmentData  // File attachment for user messages
+  documentId?: string  // Document ID for editing extracted data
 }
 
 interface TripDetails {
@@ -353,7 +354,7 @@ export default function QuotePage() {
     }
   }
 
-  const handleFileUpload = async (file: File) => {
+  const handleFileUpload = async (file: File, userMessage?: string) => {
     setIsUploading(true)
 
     try {
@@ -390,6 +391,10 @@ export default function QuotePage() {
       const formData = new FormData()
       formData.append('file', file)
       formData.append('session_id', sessionId)
+      // Include user message if provided (this combines text and file as context)
+      if (userMessage) {
+        formData.append('user_message', userMessage)
+      }
 
       // Upload file
       const uploadResponse = await fetch(`${API_URL}/chat/upload-image`, {
@@ -413,11 +418,11 @@ export default function QuotePage() {
       console.log('🔍 [DEBUG] extracted_json:', uploadData.ocr_result?.extracted_json)
       console.log('🔍 [DEBUG] Will set extractedData to:', uploadData.ocr_result?.extracted_json || null)
 
-      // Add user message with file attachment (like ChatGPT)
-      const userMessage: Message = {
+      // Add user message with file attachment and optional text (like ChatGPT)
+      const userMessageObj: Message = {
         id: Date.now().toString(),
         role: 'user',
-        content: '',  // Empty content - we'll show the file attachment instead
+        content: userMessage || '',  // Include user message if provided
         timestamp: new Date(),
         fileAttachment: {
           filename: file.name,
@@ -426,7 +431,7 @@ export default function QuotePage() {
         }
       }
 
-      setMessages(prev => [...prev, userMessage])
+      setMessages(prev => [...prev, userMessageObj])
 
       // Add assistant response with extracted data
       if (uploadData.message) {
@@ -436,9 +441,11 @@ export default function QuotePage() {
           role: 'assistant',
           content: uploadData.message,
           timestamp: new Date(),
-          extractedData: extractedDataValue
+          extractedData: extractedDataValue,
+          documentId: uploadData.document_id || undefined  // Store document ID for editing
         }
         console.log('🔍 [DEBUG] Created assistant message with extractedData:', extractedDataValue)
+        console.log('🔍 [DEBUG] Document ID:', uploadData.document_id)
         console.log('🔍 [DEBUG] Full assistant message:', assistantMessage)
         setMessages(prev => [...prev, assistantMessage])
         
@@ -478,18 +485,11 @@ export default function QuotePage() {
   }
 
   const handleSendMessage = async () => {
-    // If there's a selected file, upload it (file can be sent without text)
+    // If there's a selected file, upload it with text context (if provided)
     if (selectedFile) {
-      await handleFileUpload(selectedFile)
-      // If there's also text, send it as a separate message
-      if (inputValue.trim()) {
-        // Wait a bit for upload to complete, then send text message
-        setTimeout(() => {
-          const textToSend = inputValue
-          setInputValue('')
-          handleSendTextMessage(textToSend)
-        }, 500)
-      }
+      const textToSend = inputValue.trim()
+      await handleFileUpload(selectedFile, textToSend || undefined)
+      setInputValue('') // Clear input after sending
       return
     }
 
@@ -750,6 +750,7 @@ export default function QuotePage() {
                         <div className="mt-2">
                           <ExtractedDataCard
                             extractedData={message.extractedData}
+                            documentId={message.documentId}
                             onConfirm={async () => {
                               // Send confirmation message directly
                               const confirmMessage = "Yes, confirm"
@@ -798,8 +799,17 @@ export default function QuotePage() {
                               }
                             }}
                             onEdit={() => {
-                              // User can edit by typing
-                              setInputValue("I need to edit: ")
+                              // Edit button click handled by component itself (sets isEditing)
+                            }}
+                            onSave={(updatedData) => {
+                              // Update the message's extractedData after save
+                              setMessages(prev => prev.map(msg => 
+                                msg.id === message.id 
+                                  ? { ...msg, extractedData: updatedData }
+                                  : msg
+                              ))
+                              // Optionally trigger re-processing by sending a message
+                              // For now, just update the UI
                             }}
                             onReject={async () => {
                               // Send rejection message directly

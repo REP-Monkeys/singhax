@@ -3,10 +3,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime
 import uuid
+from pydantic import BaseModel
 
 from app.core.db import get_db
 from app.core.security import get_current_user_supabase
@@ -261,6 +262,89 @@ async def get_document(
         })
     
     return response
+
+
+class UpdateExtractedDataRequest(BaseModel):
+    """Request schema for updating extracted data."""
+    extracted_data: Dict[str, Any]
+
+
+@router.put("/{document_id}/extracted-data")
+async def update_document_extracted_data(
+    document_id: str,
+    request: UpdateExtractedDataRequest,
+    current_user: User = Depends(get_current_user_supabase),
+    db: Session = Depends(get_db)
+):
+    """
+    Update extracted_data JSON for a document.
+    
+    This allows users to edit extracted information from documents.
+    After update, the system will re-process the document to update trip_details in state.
+    """
+    # Try to find document in any table
+    document = None
+    doc_type = None
+    
+    # Try Flight
+    doc = db.query(Flight).filter(
+        Flight.id == document_id,
+        Flight.user_id == current_user.id
+    ).first()
+    if doc:
+        document = doc
+        doc_type = "flight"
+    
+    # Try Hotel
+    if not document:
+        doc = db.query(Hotel).filter(
+            Hotel.id == document_id,
+            Hotel.user_id == current_user.id
+        ).first()
+        if doc:
+            document = doc
+            doc_type = "hotel"
+    
+    # Try Visa
+    if not document:
+        doc = db.query(Visa).filter(
+            Visa.id == document_id,
+            Visa.user_id == current_user.id
+        ).first()
+        if doc:
+            document = doc
+            doc_type = "visa"
+    
+    # Try Itinerary
+    if not document:
+        doc = db.query(Itinerary).filter(
+            Itinerary.id == document_id,
+            Itinerary.user_id == current_user.id
+        ).first()
+        if doc:
+            document = doc
+            doc_type = "itinerary"
+    
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found"
+        )
+    
+    # Update extracted_data
+    document.extracted_data = request.extracted_data
+    document.extracted_at = datetime.now()
+    db.commit()
+    db.refresh(document)
+    
+    # Return updated document
+    return {
+        "id": str(document.id),
+        "type": doc_type,
+        "extracted_data": document.extracted_data,
+        "extracted_at": document.extracted_at.isoformat() if document.extracted_at else None,
+        "message": "Document extracted data updated successfully. The system will re-process this information."
+    }
 
 
 @router.get("/{document_id}/file")

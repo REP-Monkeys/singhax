@@ -120,6 +120,37 @@ async def create_checkout_session(
             travelers_data = state.values.get("travelers_data", {})
             trip_details = state.values.get("trip_details", {})
             preferences = state.values.get("preferences", {})
+            
+            # Build Ancileo JSON structures
+            from app.services.json_builders import build_ancileo_quotation_json, build_ancileo_purchase_json
+
+            # Parse name field (User model has single 'name' field, not first_name/last_name)
+            if current_user.name:
+                name_parts = current_user.name.split(' ', 1)
+                first_name = name_parts[0]
+                last_name = name_parts[1] if len(name_parts) > 1 else ""
+            else:
+                first_name = ""
+                last_name = ""
+
+            user_data = {
+                "first_name": first_name,
+                "last_name": last_name,
+                "email": current_user.email or ""
+            }
+            
+            # Build quotation JSON
+            ancileo_quotation_json = build_ancileo_quotation_json(
+                trip_details=trip_details,
+                travelers_data=travelers_data,
+                preferences=preferences
+            )
+            
+            # Build purchase JSON
+            ancileo_purchase_json = build_ancileo_purchase_json(
+                user_data=user_data,
+                travelers_data=travelers_data
+            )
 
             quote = Quote(
                 user_id=current_user.id,
@@ -137,7 +168,9 @@ async def create_checkout_session(
                     "destination": trip_details.get("destination"),
                     "departure_date": trip_details.get("departure_date"),
                     "return_date": trip_details.get("return_date")
-                }
+                },
+                ancileo_quotation_json=ancileo_quotation_json,
+                ancileo_purchase_json=ancileo_purchase_json
             )
             db.add(quote)
             db.commit()

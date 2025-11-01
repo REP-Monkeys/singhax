@@ -62,6 +62,10 @@ class Quote(Base):
     insurer_ref = Column(String, nullable=True)  # External insurer reference
     expires_at = Column(DateTime(timezone=True), nullable=True)
     
+    # Ancileo API JSON structures
+    ancileo_quotation_json = Column(JSONB, nullable=True)  # Full Ancileo quotation request format + adventure_sports_activities field
+    ancileo_purchase_json = Column(JSONB, nullable=True)  # Ancileo purchase format (minimal traveler data)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

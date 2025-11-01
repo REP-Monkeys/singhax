@@ -24,7 +24,8 @@ class JSONExtractor:
         ocr_text: str,
         session_id: str,
         filename: str,
-        language: str = 'eng'
+        language: str = 'eng',
+        user_message: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Extract structured JSON data from OCR text.
@@ -59,7 +60,7 @@ class JSONExtractor:
         if not extraction_function:
             return self._create_unknown_document_json(session_id, filename, ocr_text)
         
-        extracted_data = extraction_function(ocr_text, session_id, filename)
+        extracted_data = extraction_function(ocr_text, session_id, filename, user_message)
         
         # Step 4: Filter by confidence and categorize fields
         filtered_data = self._filter_by_confidence(extracted_data)
@@ -74,10 +75,15 @@ class JSONExtractor:
         self,
         ocr_text: str,
         session_id: str,
-        filename: str
+        filename: str,
+        user_message: Optional[str] = None
     ) -> Dict[str, Any]:
         """Extract data from flight confirmation document."""
-        prompt = f"""Extract structured information from this flight confirmation document.
+        user_context = ""
+        if user_message:
+            user_context = f"\n\nUser's message/context: {user_message}\nPlease use this context to help interpret the document and extract the information more accurately."
+        
+        prompt = f"""Extract structured information from this flight confirmation document.{user_context}
 
 Document text:
 {ocr_text[:3000]}
@@ -147,10 +153,15 @@ Only include fields where confidence >= 0.80. For fields below 0.80, set them to
         self,
         ocr_text: str,
         session_id: str,
-        filename: str
+        filename: str,
+        user_message: Optional[str] = None
     ) -> Dict[str, Any]:
         """Extract data from hotel booking document."""
-        prompt = f"""Extract structured information from this hotel booking confirmation.
+        user_context = ""
+        if user_message:
+            user_context = f"\n\nUser's message/context: {user_message}\nPlease use this context to help interpret the document and extract the information more accurately."
+        
+        prompt = f"""Extract structured information from this hotel booking confirmation.{user_context}
 
 Document text:
 {ocr_text[:3000]}
@@ -234,10 +245,15 @@ Only include fields where confidence >= 0.80. For fields below 0.80, set them to
         self,
         ocr_text: str,
         session_id: str,
-        filename: str
+        filename: str,
+        user_message: Optional[str] = None
     ) -> Dict[str, Any]:
         """Extract data from itinerary document."""
-        prompt = f"""Extract structured information from this travel itinerary.
+        user_context = ""
+        if user_message:
+            user_context = f"\n\nUser's message/context: {user_message}\nPlease use this context to help interpret the document and extract the information more accurately."
+        
+        prompt = f"""Extract structured information from this travel itinerary.{user_context}
 
 Document text:
 {ocr_text[:3000]}
@@ -345,10 +361,15 @@ Only include fields where confidence >= 0.80. For fields below 0.80, set them to
         self,
         ocr_text: str,
         session_id: str,
-        filename: str
+        filename: str,
+        user_message: Optional[str] = None
     ) -> Dict[str, Any]:
         """Extract data from visa application document."""
-        prompt = f"""Extract structured information from this visa application.
+        user_context = ""
+        if user_message:
+            user_context = f"\n\nUser's message/context: {user_message}\nPlease use this context to help interpret the document and extract the information more accurately."
+        
+        prompt = f"""Extract structured information from this visa application.{user_context}
 
 Document text:
 {ocr_text[:3000]}
@@ -444,6 +465,11 @@ Only include fields where confidence >= 0.80. For fields below 0.80, set them to
             )
             
             result_text = response.choices[0].message.content.strip()
+            
+            # Check if response is empty
+            if not result_text:
+                raise ValueError("LLM returned empty response")
+            
             import re
             
             # Try to extract JSON from response (in case LLM adds extra text)
@@ -451,8 +477,17 @@ Only include fields where confidence >= 0.80. For fields below 0.80, set them to
             json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
             if json_match:
                 result_text = json_match.group(0)
+            else:
+                # If no JSON found, raise error
+                raise ValueError(f"Could not find JSON in LLM response. Response: {result_text[:200]}")
             
-            parsed_result = json.loads(result_text)
+            # Try to parse JSON
+            try:
+                parsed_result = json.loads(result_text)
+            except json.JSONDecodeError as e:
+                print(f"❌ JSON decode error: {e}")
+                print(f"   Response text: {result_text[:500]}")
+                raise ValueError(f"Failed to parse JSON from LLM response: {str(e)}")
             
             # Handle case where LLM returns a list instead of a dict
             if isinstance(parsed_result, list):
@@ -479,11 +514,21 @@ Only include fields where confidence >= 0.80. For fields below 0.80, set them to
             
             return result
             
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON decode error in LLM extraction: {e}")
+            import traceback
+            traceback.print_exc()
+            # Re-raise so the router can handle it properly
+            raise ValueError(f"JSON parsing failed: {str(e)}")
+        except ValueError as e:
+            # Re-raise ValueError (from our validation checks)
+            raise
         except Exception as e:
             print(f"⚠️  LLM extraction failed: {e}")
             import traceback
             traceback.print_exc()
-            return self._create_unknown_document_json(session_id, filename, "")
+            # Re-raise so the router can handle it properly
+            raise ValueError(f"LLM extraction failed: {str(e)}")
     
     def _filter_by_confidence(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Filter fields by confidence and categorize them."""

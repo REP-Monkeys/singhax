@@ -134,6 +134,7 @@ class ImageUploadResponse(BaseModel):
     filename: str
     ocr_result: Dict[str, Any]
     message: Optional[str] = None  # Suggested message to send with extracted text
+    document_id: Optional[str] = None  # Document ID from database for editing
     
     class Config:
         json_schema_extra = {
