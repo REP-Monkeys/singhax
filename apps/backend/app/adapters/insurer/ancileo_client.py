@@ -233,8 +233,41 @@ class AncileoClient:
             payload=payload
         )
         
-        logger.info(f"Successfully retrieved quotation: {response.get('quoteId')}")
-        return response
+        # Transform API response to match expected format
+        # Actual API returns: {"id": "...", "offerCategories": [{...}]}
+        # Expected format: {"quoteId": "...", "offers": [{...}]}
+        quote_id = response.get('id')  # API uses "id" instead of "quoteId"
+        
+        # Extract offers from offerCategories structure
+        offer_categories = response.get('offerCategories', [])
+        offers = []
+        
+        if offer_categories:
+            for category in offer_categories:
+                if category.get('productType') == 'travel-insurance':
+                    # Extract offers and transform to expected format
+                    for offer in category.get('offers', []):
+                        offers.append({
+                            'offerId': offer.get('id'),  # API uses "id" instead of "offerId"
+                            'productCode': offer.get('productCode'),
+                            'productType': category.get('productType'),
+                            'unitPrice': offer.get('unitPrice'),
+                            'currency': offer.get('currency', 'SGD'),
+                            'coverageDetails': offer.get('coverageDetails', {}),
+                            # Preserve original offer data for debugging
+                            '_raw_offer': offer
+                        })
+        
+        # Return normalized response
+        normalized_response = {
+            'quoteId': quote_id,
+            'offers': offers,
+            # Preserve original response for debugging
+            '_raw_response': response
+        }
+        
+        logger.info(f"Successfully retrieved quotation: {quote_id} with {len(offers)} offer(s)")
+        return normalized_response
     
     def create_purchase(
         self,
