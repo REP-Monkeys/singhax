@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Chat conversation API endpoints."""
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
@@ -210,7 +211,7 @@ async def send_message(
     
     # Clean markdown formatting, but preserve plan card formatting (frontend needs it)
     # Check if response contains plan cards (has plan emojis and ** pattern)
-    has_plan_cards = any(emoji in agent_response for emoji in ['🌟', '⭐', '💎']) and '**' in agent_response
+    has_plan_cards = any(emoji in agent_response for emoji in ['🌟', '⭐', '👑']) and '**' in agent_response
     if not has_plan_cards:
         agent_response = clean_markdown(agent_response)
     

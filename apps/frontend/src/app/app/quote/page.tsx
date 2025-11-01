@@ -211,7 +211,7 @@ export default function QuotePage() {
 
     // Match plan patterns like "🌟 **Standard Plan: $123.45 SGD**" or "⭐ **Elite Plan: $456.78 SGD**"
     // Updated pattern to capture better
-    const planPattern = /([🌟⭐💎])\s?\*\*([^:]+):\s*\$\s*([0-9,]+\.?\d*)\s*SGD\*\*([\s\S]*?)(?=\n\n[🌟⭐💎]\s?\*\*|\n\n[A-Z💡📊]|\n\nAll prices|$)/g
+    const planPattern = /([🌟⭐👑])\s?\*\*([^:]+):\s*\$\s*([0-9,]+\.?\d*)\s*SGD\*\*([\s\S]*?)(?=\n\n[🌟⭐👑]\s?\*\*|\n\n[A-Z💡📊]|\n\nAll prices|$)/g
     
     let match
     while ((match = planPattern.exec(content)) !== null) {
@@ -245,7 +245,7 @@ export default function QuotePage() {
     }
 
     // Find where plans section starts and ends
-    const firstPlanIndex = content.search(/[🌟⭐💎]\s?\*\*/)
+    const firstPlanIndex = content.search(/[🌟⭐👑]\s?\*\*/)
     const outroStartIndex = content.indexOf('\n\nAll prices')
     
     const intro = firstPlanIndex > 0 ? content.substring(0, firstPlanIndex).trim() : ''
@@ -839,13 +839,13 @@ export default function QuotePage() {
                                   </div>
                                 )}
                                 {plans.length > 0 && (
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                                  <div className={`grid grid-cols-1 ${plans.length === 2 ? 'md:grid-cols-2' : 'md:grid-cols-3'} gap-3 mb-4`}>
                                     {plans.map((plan, index) => (
                                       <Card key={index} className="border border-gray-200 hover:border-gray-300 transition-colors">
                                         <CardHeader className="pb-3">
                                           <CardTitle className="text-lg flex items-center gap-2">
-                                            <span>{plan.emoji}</span>
-                                            <span>{plan.name}</span>
+                                            <span className="text-xl">{plan.emoji}</span>
+                                            <span className="break-words">{plan.name}</span>
                                           </CardTitle>
                                           <CardDescription className="text-xl font-bold text-black mt-2">
                                             {plan.price}
@@ -855,8 +855,8 @@ export default function QuotePage() {
                                           <ul className="space-y-1.5">
                                             {plan.features.map((feature, idx) => (
                                               <li key={idx} className="text-xs text-gray-600 flex items-start">
-                                                <span className="text-green-600 mr-1.5">✓</span>
-                                                <span>{feature}</span>
+                                                <span className="text-green-600 mr-1.5 flex-shrink-0">✓</span>
+                                                <span className="break-words">{feature}</span>
                                               </li>
                                             ))}
                                           </ul>

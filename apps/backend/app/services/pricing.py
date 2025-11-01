@@ -430,9 +430,8 @@ class PricingService:
         # Build quotes structure
         quotes = {}
         for tier_name, tier_data in tiers.items():
-            # Skip tier if adventure sports required but tier doesn't support it
-            if adventure_sports and not tier_data.get("coverage", {}).get("adventure_sports", False):
-                continue
+            # Include ALL tiers - users can see what coverage they're getting
+            # Don't skip standard even if adventure sports is required - let users choose
             
             quotes[tier_name] = {
                 "tier": tier_name,

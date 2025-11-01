@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """LangGraph conversation orchestration."""
 
 from typing import Dict, Any, List, Optional, TypedDict, Annotated
@@ -1497,7 +1498,7 @@ def create_conversation_graph(db) -> StateGraph:
             
             if "premier" in quotes:
                 premier = quotes["premier"]
-                response_parts.append(f"💎 **Premier Plan: ${premier['price']:.2f} SGD**")
+                response_parts.append(f"👑 **Premier Plan: ${premier['price']:.2f} SGD**")
                 response_parts.append(f"   ✓ Medical coverage: ${premier['coverage']['medical_coverage']:,}")
                 response_parts.append(f"   ✓ Trip cancellation: ${premier['coverage']['trip_cancellation']:,}")
                 response_parts.append(f"   ✓ Baggage protection: ${premier['coverage']['baggage_loss']:,}")
