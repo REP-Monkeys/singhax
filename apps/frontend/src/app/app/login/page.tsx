@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { Plane } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '@/contexts/AuthContext'
@@ -53,9 +54,10 @@ export default function LoginPage() {
     <div className="min-h-screen bg-white flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-10">
         <div className="text-center">
-          <Link href="/">
-            <h1 className="text-2xl font-semibold text-black tracking-tight hover:text-gray-700 transition-colors">
-              ConvoTravelInsure
+          <Link href="/" className="flex items-center justify-center gap-2">
+            <Plane className="w-6 h-6" style={{ color: '#dd2930' }} />
+            <h1 className="text-2xl font-semibold tracking-tight hover:opacity-80 transition-opacity" style={{ color: '#dd2930' }}>
+              TripMate
             </h1>
           </Link>
           <h2 className="mt-8 text-3xl font-bold text-black tracking-tight">
@@ -114,7 +116,8 @@ export default function LoginPage() {
             <div>
               <Button
                 type="submit"
-                className="w-full bg-black hover:bg-gray-800 text-white font-medium py-3 rounded-full transition-colors"
+                className="w-full text-white font-medium py-3 rounded-full hover:opacity-90"
+                style={{ backgroundColor: '#dd2930' }}
                 disabled={loading}
               >
                 {loading ? 'Signing in...' : 'Sign in'}
@@ -125,7 +128,7 @@ export default function LoginPage() {
 
         <div className="text-center">
           <Link href="/">
-            <Button variant="ghost" className="text-gray-600 hover:text-black font-medium">
+            <Button variant="ghost" className="text-gray-600 hover:text-gray-700 hover:bg-gray-100 font-medium">
               ← Back to home
             </Button>
           </Link>
