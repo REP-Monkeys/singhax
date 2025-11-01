@@ -66,19 +66,33 @@ export function CopilotPanel({ conversationState, sessionId }: CopilotPanelProps
   console.log('👥 travelers_data:', travelers_data)
   console.log('💰 quote_data:', quote_data)
 
-  // Auto-expand sections when they receive data
+  // Auto-expand sections when they receive data (but allow manual collapsing)
   useEffect(() => {
-    const sectionsToExpand: string[] = ['trip'] // Always show trip
+    setExpandedSections(prev => {
+      const newSections = [...prev]
+      
+      // Always include trip if not already present
+      if (!newSections.includes('trip')) {
+        newSections.push('trip')
+      }
 
-    if (travelers_data?.ages && travelers_data.ages.length > 0) {
-      sectionsToExpand.push('travelers')
-    }
+      // Add travelers if data exists and not already present
+      if (travelers_data?.ages && travelers_data.ages.length > 0 && !newSections.includes('travelers')) {
+        newSections.push('travelers')
+      }
 
-    if (quote_data?.quotes) {
-      sectionsToExpand.push('plan', 'pricing')
-    }
+      // Add plan and pricing if quotes exist and not already present
+      if (quote_data?.quotes) {
+        if (!newSections.includes('plan')) {
+          newSections.push('plan')
+        }
+        if (!newSections.includes('pricing')) {
+          newSections.push('pricing')
+        }
+      }
 
-    setExpandedSections(sectionsToExpand)
+      return newSections
+    })
   }, [travelers_data, quote_data])
 
   // Build trip data from conversation state
@@ -189,9 +203,9 @@ export function CopilotPanel({ conversationState, sessionId }: CopilotPanelProps
               className="hover:bg-gray-100"
             >
               {expandedSections.includes('trip') ? (
-                <ChevronUp className="w-4 h-4" />
+                <ChevronUp className="w-4 h-4" style={{ color: '#dd2930' }} />
               ) : (
-                <ChevronDown className="w-4 h-4" />
+                <ChevronDown className="w-4 h-4" style={{ color: '#dd2930' }} />
               )}
             </Button>
           </div>
@@ -255,9 +269,9 @@ export function CopilotPanel({ conversationState, sessionId }: CopilotPanelProps
               className="hover:bg-gray-100"
             >
               {expandedSections.includes('travelers') ? (
-                <ChevronUp className="w-4 h-4" />
+                <ChevronUp className="w-4 h-4" style={{ color: '#dd2930' }} />
               ) : (
-                <ChevronDown className="w-4 h-4" />
+                <ChevronDown className="w-4 h-4" style={{ color: '#dd2930' }} />
               )}
             </Button>
           </div>
@@ -302,9 +316,9 @@ export function CopilotPanel({ conversationState, sessionId }: CopilotPanelProps
               className="hover:bg-gray-100"
             >
               {expandedSections.includes('plan') ? (
-                <ChevronUp className="w-4 h-4" />
+                <ChevronUp className="w-4 h-4" style={{ color: '#dd2930' }} />
               ) : (
-                <ChevronDown className="w-4 h-4" />
+                <ChevronDown className="w-4 h-4" style={{ color: '#dd2930' }} />
               )}
             </Button>
           </div>
@@ -403,9 +417,9 @@ export function CopilotPanel({ conversationState, sessionId }: CopilotPanelProps
               className="hover:bg-gray-100"
             >
               {expandedSections.includes('pricing') ? (
-                <ChevronUp className="w-4 h-4" />
+                <ChevronUp className="w-4 h-4" style={{ color: '#dd2930' }} />
               ) : (
-                <ChevronDown className="w-4 h-4" />
+                <ChevronDown className="w-4 h-4" style={{ color: '#dd2930' }} />
               )}
             </Button>
           </div>

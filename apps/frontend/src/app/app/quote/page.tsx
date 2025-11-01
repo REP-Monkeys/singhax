@@ -737,7 +737,7 @@ export default function QuotePage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Chat Interface */}
           <div className="lg:col-span-2">
-            <div className="border border-gray-200 rounded-2xl h-[600px] flex flex-col bg-white shadow-sm">
+            <div className="border border-gray-200 rounded-2xl h-[calc(100vh-12rem)] flex flex-col bg-white shadow-sm">
               <div className="border-b border-gray-200 px-6 py-4">
                 <div className="flex items-center">
                   <div className="flex items-center justify-center h-10 w-10 rounded-full mr-3" style={{ backgroundColor: '#dd2930' }}>
@@ -1042,7 +1042,13 @@ export default function QuotePage() {
 
           {/* Copilot Panel */}
           <div className="lg:col-span-1">
-            <CopilotPanel conversationState={conversationState} sessionId={currentSessionId || ''} />
+            <div className="border border-gray-200 rounded-2xl h-[calc(100vh-12rem)] flex flex-col bg-white shadow-sm overflow-hidden">
+              <div 
+                className="flex-1 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+              >
+                <CopilotPanel conversationState={conversationState} sessionId={currentSessionId || ''} />
+              </div>
+            </div>
           </div>
         </div>
       </div>
