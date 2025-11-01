@@ -147,6 +147,7 @@ function MessageContent({ content }: { content: string }) {
 export default function QuotePage() {
   const { user, logout } = useAuth()
   const searchParams = useSearchParams()
+  const router = useRouter()
   const sessionIdParam = searchParams.get('session')
 
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(sessionIdParam)
@@ -372,7 +373,7 @@ export default function QuotePage() {
     }
   }
 
-  // Load chat history when session_id is provided
+  // Load chat history when session_id is provided (only once on mount or when session changes)
   useEffect(() => {
     if (sessionIdParam) {
       loadChatHistory()
@@ -441,6 +442,8 @@ export default function QuotePage() {
         const sessionData = await sessionResponse.json()
         sessionId = sessionData.session_id
         setCurrentSessionId(sessionId)
+        // Update URL with session ID so it persists on refresh
+        router.replace(`/app/quote?session=${sessionId}`, { scroll: false })
       }
 
       // Create form data
@@ -596,6 +599,8 @@ export default function QuotePage() {
         const sessionData = await sessionResponse.json()
         sessionId = sessionData.session_id
         setCurrentSessionId(sessionId)
+        // Update URL with session ID so it persists on refresh
+        router.replace(`/app/quote?session=${sessionId}`, { scroll: false })
       }
 
       // Send message to backend

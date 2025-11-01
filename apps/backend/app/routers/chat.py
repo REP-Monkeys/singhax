@@ -507,10 +507,55 @@ async def get_session_state(
     
     print(f"   ✅ Returning {len(formatted_messages)} formatted messages")
     
+    # Query for policy associated with this session
+    policy_data = None
+    policy_confirmed = False
+    
+    try:
+        from app.models.trip import Trip
+        from app.models.policy import Policy
+        
+        # Find trip by session_id
+        trip = db.query(Trip).filter(Trip.session_id == session_id).first()
+        
+        if trip:
+            # Find policy via trip -> quotes -> policy
+            # Get the most recent confirmed quote for this trip
+            from app.models.quote import Quote
+            quote = db.query(Quote).filter(
+                Quote.trip_id == trip.id
+            ).order_by(Quote.created_at.desc()).first()
+            
+            if quote:
+                # Find policy for this quote
+                policy = db.query(Policy).filter(
+                    Policy.quote_id == quote.id
+                ).first()
+                
+                if policy:
+                    policy_confirmed = True
+                    # Prepare policy data for response
+                    policy_data = {
+                        "id": str(policy.id),
+                        "policy_number": policy.policy_number,
+                        "status": policy.status.value if hasattr(policy.status, 'value') else str(policy.status),
+                        "effective_date": policy.effective_date.isoformat() if policy.effective_date else None,
+                        "expiry_date": policy.expiry_date.isoformat() if policy.expiry_date else None,
+                        "coverage": policy.coverage,
+                        "named_insureds": policy.named_insureds,
+                        "selected_tier": quote.selected_tier if quote else None
+                    }
+                    print(f"   ✅ Found confirmed policy {policy.policy_number} for session")
+    except Exception as e:
+        print(f"   ⚠️ Error querying policy: {e}")
+        # Don't fail the whole endpoint if policy lookup fails
+    
     return ChatSessionState(
         session_id=session_id,
         state=state.values,
-        messages=formatted_messages
+        messages=formatted_messages,
+        policy=policy_data,
+        policy_confirmed=policy_confirmed
     )
 
 
@@ -720,9 +765,44 @@ async def upload_image(
                     "uploaded_at": datetime.now().isoformat()
                 })
 
+                # Ensure messages exist in state (required for session to be retrievable)
+                # Helper function to get assistant message based on document type
+                def get_assistant_message_for_doc_type(doc_type: str) -> str:
+                    if doc_type == "flight_confirmation":
+                        return "I've extracted the information from your flight booking. Please review the details below:"
+                    elif doc_type == "hotel_booking":
+                        return "I've extracted the information from your hotel booking. Please review the details below:"
+                    elif doc_type == "visa_application":
+                        return "I've extracted the information from your visa. Please review the details below:"
+                    elif doc_type == "itinerary":
+                        return "I've extracted the information from your itinerary. Please review the details below:"
+                    else:
+                        return "I've extracted the information from your document. Please review the details below:"
+                
+                # Create user message about the upload
+                upload_message = user_message if user_message else f"[User uploaded a document: {file.filename}]"
+                user_msg = HumanMessage(content=upload_message)
+                
+                # Create assistant response message
+                assistant_msg_content = get_assistant_message_for_doc_type(document_type or "document")
+                assistant_msg = AIMessage(content=assistant_msg_content)
+                
+                # If this is a new session, create initial messages
+                if "messages" not in state_values or not state_values.get("messages"):
+                    state_values["messages"] = [user_msg, assistant_msg]
+                    print(f"✅ Created initial messages for new session")
+                else:
+                    # Session already exists, just add the user upload message and assistant response
+                    state_values["messages"].append(user_msg)
+                    state_values["messages"].append(assistant_msg)
+                    print(f"✅ Added upload messages to existing session")
+
                 # Update state WITHOUT invoking the graph (no questions asked yet)
-                # Use graph.update_state to store document_data without triggering execution
-                graph.update_state(config, {"document_data": state_values["document_data"]})
+                # Use graph.update_state to store document_data and messages without triggering execution
+                graph.update_state(config, {
+                    "document_data": state_values["document_data"],
+                    "messages": state_values["messages"]
+                })
 
                 print(f"✅ Document data stored in state (not processed yet - waiting for user confirmation)")
 

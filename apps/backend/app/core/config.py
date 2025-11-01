@@ -93,6 +93,14 @@ class Settings(BaseSettings):
     payment_success_url: str = "http://localhost:8085/success?session_id={CHECKOUT_SESSION_ID}"
     payment_cancel_url: str = "http://localhost:8085/cancel"
     
+    # Email Configuration
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from_email: Optional[str] = None
+    smtp_use_tls: bool = True
+    
     # LLM Configuration
     model_name: str = "llama3-8b-8192"  # Default Groq model
     embedding_model: str = "text-embedding-3-small"

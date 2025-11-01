@@ -113,6 +113,8 @@ class ChatSessionState(BaseModel):
     session_id: str
     state: Dict[str, Any]
     messages: List[Dict[str, str]]  # List of {"role": "user/assistant", "content": "text"}
+    policy: Optional[Dict[str, Any]] = None  # Policy details if confirmed
+    policy_confirmed: bool = False  # Whether policy has been confirmed
     
     class Config:
         json_schema_extra = {
@@ -122,7 +124,9 @@ class ChatSessionState(BaseModel):
                 "messages": [
                     {"role": "user", "content": "I need insurance"},
                     {"role": "assistant", "content": "Where are you traveling?"}
-                ]
+                ],
+                "policy": None,
+                "policy_confirmed": False
             }
         }
 
