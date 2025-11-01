@@ -24,11 +24,15 @@ export async function transcribeAudio(
   token: string,
   language: string = 'en'
 ): Promise<TranscribeResponse> {
+  const url = `${API_URL}/voice/transcribe`
+  console.log(`🌐 [voiceApi] Transcribing to: ${url}`)
+  console.log(`📦 [voiceApi] Blob size: ${audioBlob.size} bytes, type: ${audioBlob.type}`)
+
   const formData = new FormData()
   formData.append('audio', audioBlob, 'recording.webm')
   formData.append('language', language)
-  
-  const response = await fetch(`${API_URL}/api/v1/voice/transcribe`, {
+
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -36,13 +40,27 @@ export async function transcribeAudio(
     },
     body: formData,
   })
-  
+
+  console.log(`📡 [voiceApi] Response status: ${response.status} ${response.statusText}`)
+
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Transcription failed' }))
-    throw new Error(error.detail || 'Failed to transcribe audio')
+    const errorText = await response.text()
+    console.error(`❌ [voiceApi] Transcription error response:`, errorText)
+
+    let errorDetail = 'Transcription failed'
+    try {
+      const errorJson = JSON.parse(errorText)
+      errorDetail = errorJson.detail || errorDetail
+    } catch {
+      errorDetail = errorText || errorDetail
+    }
+
+    throw new Error(errorDetail)
   }
-  
-  return response.json()
+
+  const result = await response.json()
+  console.log(`✅ [voiceApi] Transcription success:`, result.text?.substring(0, 50) + '...')
+  return result
 }
 
 /**
@@ -54,7 +72,7 @@ export async function synthesizeSpeech(
   token: string,
   voiceId?: string
 ): Promise<string> {
-  const response = await fetch(`${API_URL}/api/v1/voice/synthesize`, {
+  const response = await fetch(`${API_URL}/voice/synthesize`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -88,7 +106,7 @@ export async function saveVoiceTranscript(
   token: string
 ): Promise<void> {
   try {
-    await fetch(`${API_URL}/api/v1/voice/save-transcript`, {
+    await fetch(`${API_URL}/voice/save-transcript`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,

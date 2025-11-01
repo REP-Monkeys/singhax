@@ -130,19 +130,27 @@ async def synthesize_speech(
 ):
     """
     Convert AI response text to speech using ElevenLabs.
-    
+
     Uses Bella voice (warm, professional) with turbo_v2 model.
     Returns streaming MP3 audio.
-    
+
     Args:
         request: Text to synthesize (max 5000 chars)
-        
+
     Returns:
         Audio stream (audio/mpeg)
     """
     logger.info(f"🔊 TTS request from user {current_user.id}")
     logger.info(f"   Text length: {len(request.text)} chars")
-    
+
+    # Check if TTS is enabled
+    if not settings.enable_tts:
+        logger.info("   ⏸️  TTS is disabled (to enable, set ENABLE_TTS=true in .env)")
+        raise HTTPException(
+            status_code=503,
+            detail="Text-to-speech is currently disabled. TTS credits are being conserved."
+        )
+
     try:
         # Use Bella voice by default, or custom voice from request
         voice_id = request.voice_id or settings.elevenlabs_voice_id

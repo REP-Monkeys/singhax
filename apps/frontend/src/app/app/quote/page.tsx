@@ -1018,20 +1018,19 @@ export default function QuotePage() {
                       className="hidden"
                     />
                     {/* PDF Upload Button */}
-                    <Button
+                    <button
                       onClick={() => fileInputRef.current?.click()}
                       disabled={isUploading || isLoading}
-                      size="sm"
-                      variant="outline"
-                      className="border-gray-300 hover:bg-gray-100 text-gray-700 rounded-full h-10 w-10 p-0"
+                      className="border-2 rounded-full h-10 w-10 p-0 flex items-center justify-center hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      style={{ borderColor: '#dd2930', color: '#dd2930' }}
                       title="Upload PDF or image"
                     >
                       {isUploading ? (
-                        <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                        <div className="w-4 h-4 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#dd2930', borderTopColor: 'transparent' }} />
                       ) : (
-                        <FileText className="w-4 h-4" />
+                        <FileText className="w-4 h-4" stroke="#dd2930" strokeWidth={2} style={{ color: '#dd2930' }} />
                       )}
-                    </Button>
+                    </button>
                     <VoiceButton
                       sessionId={currentSessionId || ''}
                       onTranscript={handleVoiceInput}

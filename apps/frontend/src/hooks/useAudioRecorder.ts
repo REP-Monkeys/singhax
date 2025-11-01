@@ -26,6 +26,7 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
   const audioChunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
+  const mimeTypeRef = useRef<string>('audio/webm;codecs=opus') // Store detected mime type
 
   const startRecording = useCallback(async () => {
     try {
@@ -41,12 +42,29 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       })
       
       streamRef.current = stream
-      
-      // Create MediaRecorder with webm format (Chrome support)
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
-      })
-      
+
+      // Detect supported audio format (Safari needs mp4, Chrome/Firefox support webm)
+      let mimeType = 'audio/webm;codecs=opus'
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        // Try Safari-compatible format
+        mimeType = 'audio/mp4'
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          // Fallback to browser default
+          mimeType = ''
+          console.warn('Using browser default audio format')
+        }
+      }
+
+      console.log(`🎤 Using audio format: ${mimeType || 'default'}`)
+
+      // Store mime type for blob creation
+      mimeTypeRef.current = mimeType || 'audio/webm;codecs=opus'
+
+      // Create MediaRecorder
+      const mediaRecorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream)
+
       mediaRecorderRef.current = mediaRecorder
       audioChunksRef.current = []
       
@@ -94,9 +112,9 @@ export function useAudioRecorder(): UseAudioRecorderReturn {
       const mediaRecorder = mediaRecorderRef.current
       
       mediaRecorder.onstop = () => {
-        // Create audio blob from chunks
-        const audioBlob = new Blob(audioChunksRef.current, { 
-          type: 'audio/webm;codecs=opus' 
+        // Create audio blob from chunks using detected mime type
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: mimeTypeRef.current
         })
         
         console.log(`🎤 Recording stopped. Size: ${(audioBlob.size / 1024).toFixed(2)}KB`)

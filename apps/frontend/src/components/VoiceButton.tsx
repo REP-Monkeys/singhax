@@ -39,42 +39,57 @@ export function VoiceButton({
   }, [mode, isActive, onActiveChange])
 
   const handleStartRecording = async () => {
+    console.log('🎤 [VoiceButton] Starting recording...')
     setError(null)
     setTranscript('')
-    await recorder.startRecording()
-    setMode('recording')
+
+    try {
+      await recorder.startRecording()
+      setMode('recording')
+      console.log('✅ [VoiceButton] Recording started successfully')
+    } catch (err) {
+      console.error('❌ [VoiceButton] Failed to start recording:', err)
+      setError('Failed to start recording. Please check microphone permissions.')
+      setMode('idle')
+    }
   }
 
   const handleStopRecording = async () => {
+    console.log('⏹️ [VoiceButton] Stopping recording...')
     const audioBlob = await recorder.stopRecording()
-    
+
     if (!audioBlob) {
+      console.error('❌ [VoiceButton] No audio blob returned')
       setError('Failed to capture audio')
       setMode('idle')
       return
     }
-    
+
     // Check size
     const sizeMB = audioBlob.size / (1024 * 1024)
+    console.log(`📊 [VoiceButton] Audio blob size: ${sizeMB.toFixed(2)}MB, type: ${audioBlob.type}`)
+
     if (sizeMB > 5) {
       setError('Recording too long. Please keep it under 5MB (about 2 minutes).')
       setMode('idle')
       return
     }
-    
+
     setMode('processing')
-    
+
     try {
       // Step 1: Get auth token
+      console.log('🔑 [VoiceButton] Getting auth token...')
       const { data: { session } } = await supabase.auth.getSession()
       const token = session?.access_token
-      
+
       if (!token) {
         throw new Error('Not authenticated. Please log in.')
       }
-      
+      console.log('✅ [VoiceButton] Auth token obtained')
+
       // Step 2: Transcribe audio
-      console.log('🎤 Transcribing audio...')
+      console.log('🎤 [VoiceButton] Transcribing audio...')
       const transcribeResult = await transcribeAudio(audioBlob, token)
       
       if (!transcribeResult.success || !transcribeResult.text) {
@@ -97,14 +112,33 @@ export function VoiceButton({
       
       console.log(`💬 AI Response: ${aiResponse.substring(0, 50)}...`)
       
-      // Step 5: Synthesize and play response
-      setMode('speaking')
-      
-      console.log('🔊 Generating speech...')
-      const audioUrl = await synthesizeSpeech(aiResponse, token)
-      
-      // Play audio
-      await player.play(audioUrl)
+      // Step 5: Synthesize and play response (if TTS is enabled)
+      try {
+        setMode('speaking')
+
+        console.log('🔊 Generating speech...')
+        const audioUrl = await synthesizeSpeech(aiResponse, token)
+
+        // Play audio
+        await player.play(audioUrl)
+      } catch (ttsError: any) {
+        // If TTS is disabled (503), just skip audio playback
+        if (ttsError.message?.includes('disabled') || ttsError.message?.includes('conserved')) {
+          console.log('ℹ️  TTS disabled - skipping audio playback')
+          setMode('idle')
+          setTranscript('')
+
+          // Auto-start recording for next question after 1 second delay
+          setTimeout(() => {
+            handleStartRecording()
+          }, 1000)
+
+          return // Skip the rest of audio handling
+        } else {
+          // Re-throw other errors
+          throw ttsError
+        }
+      }
       
       // Step 6: Save transcript
       await saveVoiceTranscript(
@@ -147,15 +181,14 @@ export function VoiceButton({
     <div className="flex flex-col items-center gap-2">
       {/* Main Button */}
       {mode === 'idle' && (
-        <Button
+        <button
           onClick={handleStartRecording}
-          size="sm"
-          variant="outline"
-          className="gap-2 rounded-full h-10 w-10 p-0"
+          className="border-2 rounded-full h-10 w-10 p-0 flex items-center justify-center hover:bg-red-50 transition-colors"
+          style={{ borderColor: '#dd2930', color: '#dd2930' }}
           title="Speak your question"
         >
-          <Mic className="w-4 h-4" />
-        </Button>
+          <Mic className="w-4 h-4" stroke="#dd2930" strokeWidth={2} style={{ color: '#dd2930' }} />
+        </button>
       )}
       
       {mode === 'recording' && (

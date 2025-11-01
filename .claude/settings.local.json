@@ -24,7 +24,8 @@
       "Bash(source:*)",
       "Bash(alembic upgrade:*)",
       "Bash(alembic downgrade:*)",
-      "Bash(alembic current:*)"
+      "Bash(alembic current:*)",
+      "Bash(/Users/winstonyang/Desktop/Coding/Hackathons/Singhacks/.env)"
     ],
     "deny": [],
     "ask": []

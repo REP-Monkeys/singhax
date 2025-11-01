@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     stripe_webhook_secret: Optional[str] = None  # For webhook signature verification
     
     # Voice Configuration (ElevenLabs + Whisper)
+    enable_tts: bool = Field(
+        default=False,
+        description="Enable text-to-speech with ElevenLabs (set to False to save credits)"
+    )
     elevenlabs_api_key: Optional[str] = None
     elevenlabs_voice_id: str = Field(
         default="EXAVITQu4vr4xnSDxMaL",  # Bella voice
