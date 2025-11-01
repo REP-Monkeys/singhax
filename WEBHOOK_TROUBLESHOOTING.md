@@ -259,3 +259,4 @@ If any of these fail, check that specific step's logs.
 - Use manual trigger script as backup
 - Enable polling mechanism for auto-refresh (no page reload needed)
 
+

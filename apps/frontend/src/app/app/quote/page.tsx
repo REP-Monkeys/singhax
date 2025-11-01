@@ -202,6 +202,7 @@ export default function QuotePage() {
 
   // Parse plan information from message content
   const parsePlans = (content: string) => {
+    console.log('🔍 [parsePlans] Parsing content:', content.substring(0, 500))
     const plans: Array<{
       name: string
       price: string
@@ -213,7 +214,14 @@ export default function QuotePage() {
     const planPattern = /([\u{1F300}-\u{1F9FF}])\s?\*\*([^:]+):\s*\$\s*([0-9,]+\.?\d*)\s*SGD\*\*([\s\S]*?)(?=\n\n[\u{1F300}-\u{1F9FF}]\s?\*\*|\n\n[A-Z💡📊]|\n\nAll prices|$)/gu
     
     let match
+    let matchCount = 0
     while ((match = planPattern.exec(content)) !== null) {
+      matchCount++
+      console.log(`🔍 [parsePlans] Match #${matchCount}:`, {
+        emoji: match[1],
+        name: match[2],
+        price: match[3]
+      })
       let emoji = match[1]
       const name = match[2].trim()
       const price = `$${match[3]} SGD`
@@ -236,9 +244,11 @@ export default function QuotePage() {
 
       if (features.length > 0 || name.includes('Plan')) {
         plans.push({ name, price, features, emoji })
+        console.log(`✅ [parsePlans] Added plan:`, { name, price, emoji, featureCount: features.length })
       }
     }
 
+    console.log(`🔍 [parsePlans] Total plans parsed: ${plans.length}`)
     return plans
   }
 
