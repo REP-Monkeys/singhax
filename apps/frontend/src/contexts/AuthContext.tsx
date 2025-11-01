@@ -149,21 +149,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       // Use session token to fetch user from backend
       const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
-      const response = await fetch(`${backendUrl}/auth/me`, {
+      const url = `${backendUrl}/auth/me`
+      
+      console.log(`[AuthContext] Fetching user from: ${url}`)
+      
+      const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
         },
       })
 
       if (!response.ok) {
-        throw new Error('Failed to fetch user data')
+        const errorText = await response.text()
+        console.error(`[AuthContext] Backend returned error: ${response.status} ${response.statusText}`, errorText)
+        throw new Error(`Failed to fetch user data: ${response.status} ${response.statusText}`)
       }
 
       const userData = await response.json()
       setUser(userData)
       setLoading(false)
-    } catch (error) {
-      console.error('Failed to refresh user:', error)
+    } catch (error: any) {
+      // Distinguish between network errors and HTTP errors
+      if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+        console.error('[AuthContext] Network error - Backend server may not be running or CORS issue')
+        console.error('[AuthContext] Check if backend is running at:', process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')
+        console.error('[AuthContext] Error details:', error)
+      } else {
+        console.error('[AuthContext] Failed to refresh user:', error)
+      }
       setUser(null)
       setLoading(false)
     }

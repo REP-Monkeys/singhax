@@ -1,0 +1,104 @@
+{
+  "session_id": "4d6a9d27-d2ea-4742-9fd4-9f1f21ef965f",
+  "document_type": "hotel_booking",
+  "extracted_at": "2025-11-01T13:07:37.854661Z",
+  "source_filename": "sample_hotel_booking.pdf",
+  "hotel_details": {
+    "name": "SAMPLE GRAND HOTEL",
+    "chain": null,
+    "star_rating": null,
+    "confidence": 0.95
+  },
+  "location": {
+    "address": {
+      "street": "123 Test Street",
+      "city": "Tokyo",
+      "country": "Japan",
+      "postal_code": "100-0001",
+      "full": "123 Test Street, Example District, Tokyo 100-0001, Japan",
+      "confidence": 0.94
+    }
+  },
+  "booking_dates": {
+    "check_in": {
+      "date": "2099-12-20",
+      "time": "15:00",
+      "confidence": 0.96
+    },
+    "check_out": {
+      "date": "2099-12-25",
+      "time": "11:00",
+      "confidence": 0.96
+    },
+    "nights": {
+      "count": 5,
+      "calculated_from_dates": true,
+      "confidence": 0.98
+    }
+  },
+  "room_details": {
+    "room_type": "Deluxe King Room",
+    "number_of_rooms": 1,
+    "occupancy": 2,
+    "smoking_preference": null,
+    "confidence": 0.92
+  },
+  "investment_value": {
+    "total_cost": {
+      "amount": 109998.0,
+      "currency": "JPY",
+      "confidence": 0.95
+    },
+    "per_night": {
+      "amount": 21999.6,
+      "currency": "JPY",
+      "confidence": 0.93
+    },
+    "deposit_paid": null,
+    "refundable": null,
+    "cancellation_policy": null,
+    "confidence": 0.9
+  },
+  "guests": [
+    {
+      "name": {
+        "first": "TEST",
+        "last": "USER",
+        "full": "TEST USER",
+        "confidence": 0.92
+      },
+      "age": null,
+      "is_primary_guest": true,
+      "is_adult": true,
+      "confidence": 0.9
+    }
+  ],
+  "booking_reference": {
+    "confirmation_number": "TEST-HB-99999",
+    "booking_id": null,
+    "confidence": 0.95
+  },
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [
+    "hotel_details.confidence",
+    "location.address.confidence",
+    "booking_dates.check_in.confidence",
+    "booking_dates.check_out.confidence",
+    "booking_dates.nights.confidence",
+    "room_details.confidence",
+    "investment_value.total_cost.confidence",
+    "investment_value.per_night.confidence",
+    "investment_value.confidence",
+    "guests[0].name.confidence",
+    "guests[0].confidence",
+    "guests[0].name.confidence",
+    "guests[0].confidence",
+    "booking_reference.confidence"
+  ],
+  "low_confidence_fields": [],
+  "missing_fields": []
+}

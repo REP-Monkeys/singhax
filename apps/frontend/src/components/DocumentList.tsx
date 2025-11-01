@@ -14,12 +14,14 @@ interface DocumentSummary {
   outbound_airline?: string
   inbound_airline?: string
   departure_date?: string
+  return_date?: string
   destination?: string
+  origin_country?: string
+  destination_country?: string
   hotel_name?: string
   check_in_date?: string
   location?: string
   visa_type?: string
-  destination_country?: string
   applicant?: string
   trip_title?: string
   start_date?: string
@@ -87,6 +89,17 @@ export function DocumentList({ authToken }: DocumentListProps) {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
+  const shortenCountryName = (country: string): string => {
+    // Shorten common country names for display
+    const countryShortNames: Record<string, string> = {
+      'South Korea': 'Korea',
+      'United States': 'USA',
+      'United Kingdom': 'UK',
+      'United Arab Emirates': 'UAE',
+    }
+    return countryShortNames[country] || country
+  }
+
   const getDocumentTypeIcon = (type: string) => {
     switch (type) {
       case 'flight':
@@ -124,20 +137,26 @@ export function DocumentList({ authToken }: DocumentListProps) {
         const tripType = summary.trip_type || 'one_way'  // Default to one_way if not provided
         const outboundAirline = summary.outbound_airline || summary.airline || 'Flight'
         const inboundAirline = summary.inbound_airline
-        const destination = summary.destination || ''
+        const originCountry = summary.origin_country || 'Singapore'
+        const destinationCountry = summary.destination_country || summary.destination || ''
         const departureDate = summary.departure_date ? ` on ${formatDate(summary.departure_date)}` : ''
         
-        // Build airline display
-        let airlineDisplay = outboundAirline
-        if (tripType === 'return' && inboundAirline && inboundAirline !== outboundAirline) {
-          // Different airlines for going and returning
-          airlineDisplay = `${outboundAirline} → ${inboundAirline}`
+        if (tripType === 'return' && inboundAirline) {
+          // For return trips, show both directions
+          // Outbound: "Airline Origin -> Destination"
+          // Inbound: "Airline Destination -> Origin" (with shortened country names)
+          const returnDate = summary.return_date ? ` on ${formatDate(summary.return_date)}` : ''
+          const outboundDisplay = `${outboundAirline} ${originCountry} -> ${destinationCountry}`
+          const inboundDestShort = shortenCountryName(destinationCountry)
+          const inboundOriginShort = shortenCountryName(originCountry)
+          const inboundDisplay = `${inboundAirline} ${inboundDestShort} -> ${inboundOriginShort}`
+          return `${outboundDisplay}${departureDate ? departureDate : ''}\n${inboundDisplay}${returnDate ? returnDate : ''}`
+        } else {
+          // One-way trip
+          const airlineDisplay = outboundAirline
+          const tripTypeSuffix = tripType === 'return' ? ' (Return)' : ' (One-Way)'
+          return `${airlineDisplay}${destinationCountry ? ` ${originCountry} -> ${destinationCountry}` : ''}${departureDate}${tripTypeSuffix}`
         }
-        
-        // Build trip type suffix
-        const tripTypeSuffix = tripType === 'return' ? ' (Return)' : ' (One-Way)'
-        
-        return `${airlineDisplay}${destination ? ` to ${destination}` : ''}${departureDate}${tripTypeSuffix}`
       case 'hotel':
         return `${summary.hotel_name || 'Hotel'}${summary.location ? ` in ${summary.location}` : ''}${summary.check_in_date ? ` - Check-in: ${formatDate(summary.check_in_date)}` : ''}`
       case 'visa':
@@ -245,9 +264,9 @@ export function DocumentList({ authToken }: DocumentListProps) {
                     <span>{formatDate(doc.created_at)}</span>
                   </div>
 
-                  <p className="text-sm text-gray-700 line-clamp-2">
+                  <div className="text-sm text-gray-700 line-clamp-3 whitespace-pre-line">
                     {getDocumentSummary(doc)}
-                  </p>
+                  </div>
                 </div>
               </div>
             </Card>

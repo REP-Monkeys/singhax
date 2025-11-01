@@ -316,16 +316,15 @@ export default function DashboardPage() {
             </button>
             <button
               onClick={() => setActiveTab('documents')}
-              className={`pb-3 px-1 font-medium text-sm transition-colors relative ${
-                activeTab === 'documents'
-                  ? 'text-black'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
+              className={`pb-3 px-1 font-medium text-base transition-colors relative h-full flex items-end hover:opacity-80`}
+              style={{ color: '#dd2930' }}
             >
-              Documents
-              {activeTab === 'documents' && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-black" />
-              )}
+              <span className="relative">
+                Documents
+                {activeTab === 'documents' && (
+                  <div className="absolute bottom-[-12px] left-0 right-0 h-0.5" style={{ backgroundColor: '#dd2930' }} />
+                )}
+              </span>
             </button>
           </div>
 
@@ -401,30 +400,7 @@ export default function DashboardPage() {
                       />
                     ) : null}
                     
-                    {/* Loading Indicator */}
-                    {trip.destinations.length > 0 && 
-                     imageLoadingStates[trip.destinations[0]] && 
-                     !getDestinationImageUrl(trip.destinations[0]) && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                        <div className="flex flex-col items-center gap-2">
-                          <Loader2 className="w-8 h-8 text-white animate-spin" />
-                          <p className="text-white text-sm font-medium drop-shadow">
-                            Generating image...
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Error Indicator */}
-                    {trip.destinations.length > 0 && 
-                     imageErrors[trip.destinations[0]] && 
-                     !getDestinationImageUrl(trip.destinations[0]) && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/10">
-                        <p className="text-white text-xs font-medium drop-shadow px-4 text-center">
-                          Image generation unavailable
-                        </p>
-                      </div>
-                    )}
+                    {/* Image loading states removed - cards will show empty state */}
                     
                     <div className="absolute top-3 right-3">
                       <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusBadge(trip.status)}`}>

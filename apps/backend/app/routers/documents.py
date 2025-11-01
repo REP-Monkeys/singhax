@@ -453,13 +453,43 @@ def _get_document_summary(document, doc_type: str) -> dict:
     summary = {}
     
     if doc_type == "flight":
+        # Infer origin country from departure airport
+        # For Singapore market, default origin is Singapore
+        origin_country = "Singapore"  # Default for Singapore market
+        if document.departure_airport_code:
+            # Map common airport codes to countries
+            airport_to_country = {
+                "SIN": "Singapore",
+                "CGK": "Indonesia",
+                "KUL": "Malaysia",
+                "BKK": "Thailand",
+                "ICN": "South Korea",
+                "NRT": "Japan",
+                "HKG": "Hong Kong",
+                "PEK": "China",
+                "SYD": "Australia",
+            }
+            origin_country = airport_to_country.get(document.departure_airport_code.upper(), origin_country)
+        elif document.departure_airport_name:
+            # Try to infer from airport name
+            airport_name_lower = document.departure_airport_name.lower()
+            if "singapore" in airport_name_lower or "changi" in airport_name_lower:
+                origin_country = "Singapore"
+            elif "seoul" in airport_name_lower or "incheon" in airport_name_lower:
+                origin_country = "South Korea"
+            elif "tokyo" in airport_name_lower or "narita" in airport_name_lower or "haneda" in airport_name_lower:
+                origin_country = "Japan"
+        
         summary = {
             "trip_type": document.trip_type,
             "airline": document.airline_name,  # Backward compatibility
             "outbound_airline": document.outbound_airline_name,
             "inbound_airline": document.inbound_airline_name,
             "departure_date": document.departure_date.isoformat() if document.departure_date else None,
-            "destination": f"{document.destination_city}, {document.destination_country}" if document.destination_city and document.destination_country else document.destination_country
+            "return_date": document.return_date.isoformat() if document.return_date else None,
+            "destination": f"{document.destination_city}, {document.destination_country}" if document.destination_city and document.destination_country else document.destination_country,
+            "origin_country": origin_country,
+            "destination_country": document.destination_country
         }
     elif doc_type == "hotel":
         summary = {

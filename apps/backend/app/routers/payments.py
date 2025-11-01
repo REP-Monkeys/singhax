@@ -3,7 +3,7 @@
 import logging
 import json
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, date
 
 import stripe
 from fastapi import APIRouter, Request, HTTPException, Depends
@@ -152,6 +152,20 @@ async def create_checkout_session(
                 travelers_data=travelers_data
             )
 
+            # Convert dates to strings for JSONB storage
+            departure_date = trip_details.get("departure_date")
+            return_date = trip_details.get("return_date")
+            
+            if isinstance(departure_date, date):
+                departure_date_str = departure_date.strftime("%Y-%m-%d")
+            else:
+                departure_date_str = str(departure_date) if departure_date else None
+            
+            if isinstance(return_date, date):
+                return_date_str = return_date.strftime("%Y-%m-%d")
+            else:
+                return_date_str = str(return_date) if return_date else None
+
             quote = Quote(
                 user_id=current_user.id,
                 trip_id=trip_id,
@@ -166,8 +180,8 @@ async def create_checkout_session(
                     "selected_tier": selected_tier,
                     "tier_details": tier_quote,
                     "destination": trip_details.get("destination"),
-                    "departure_date": trip_details.get("departure_date"),
-                    "return_date": trip_details.get("return_date")
+                    "departure_date": departure_date_str,
+                    "return_date": return_date_str
                 },
                 ancileo_quotation_json=ancileo_quotation_json,
                 ancileo_purchase_json=ancileo_purchase_json

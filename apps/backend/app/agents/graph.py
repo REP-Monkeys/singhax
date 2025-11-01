@@ -1695,19 +1695,47 @@ Is this information correct? (yes/no)"""
         # Get user's policy/tier context
         from app.agents.tools import get_user_policy_context
         user_context = get_user_policy_context(user_id, db)
-        
-        print(f"   User context: has_policy={user_context.get('has_policy')}, tier={user_context.get('tier')}")
-        
+
+        # IMPORTANT: If user just received a quote (not purchased yet), use quote_data from state
+        quote_data = state.get("quote_data")
+        if quote_data and not user_context.get("has_policy"):
+            # User has quote but hasn't purchased - use recommended tier or allow them to ask about any tier
+            print(f"   📊 User has active quote data - using for context")
+            trip_details = state.get("trip_details", {})
+            travelers_data = state.get("travelers_data", {})
+
+            # Store quote info in user_context for the explanation
+            user_context["has_quote"] = True
+            user_context["destination"] = trip_details.get("destination")
+            user_context["trip_dates"] = f"{trip_details.get('departure_date')} to {trip_details.get('return_date')}"
+            user_context["travelers_count"] = travelers_data.get("count", 1)
+            user_context["quotes"] = quote_data.get("quotes", {})
+            user_context["recommended_tier"] = quote_data.get("recommended_tier", "standard")
+            # CRITICAL: Clear tier so we don't filter RAG results by tier
+            user_context["tier"] = None
+
+            print(f"   Using quote context: destination={user_context['destination']}, recommended_tier={user_context['recommended_tier']}")
+
+        print(f"   User context: has_policy={user_context.get('has_policy')}, has_quote={user_context.get('has_quote')}, tier={user_context.get('tier')}")
+
         # Search policy documents using RAG
         from app.services.rag import RAGService
         rag_service = RAGService(db=db)
-        
+
         try:
-            # Search with tier filter if user has selected a tier
+            # IMPORTANT: Only filter by tier if user has an ACTIVE policy
+            # If user just has quotes, search ALL tiers so LLM can compare
+            tier_filter = None
+            if user_context.get("has_policy") and user_context.get("tier"):
+                tier_filter = user_context.get("tier")
+                print(f"   Filtering by tier: {tier_filter}")
+            else:
+                print(f"   Searching all tiers (user has quote, not policy)")
+
             search_results = rag_service.search(
                 query=user_question,
-                limit=3,
-                tier=user_context.get("tier") if user_context.get("tier") else None
+                limit=5,  # Increased from 3 to get more results
+                tier=tier_filter
             )
             print(f"   Found {len(search_results)} relevant policy sections")
         except Exception as e:
@@ -1730,13 +1758,37 @@ Is this information correct? (yes/no)"""
 - Adventure Sports: {'Yes' if user_context['coverage'].get('adventure_sports') else 'No'}
 
 Answer their question SPECIFICALLY about THEIR {tier_display} policy."""
-        
+
+        elif user_context.get("has_quote"):
+            # User just received quotes - use that context
+            recommended_tier = user_context.get("recommended_tier", "standard").title()
+            quotes = user_context.get("quotes", {})
+
+            # Build quote summary
+            quote_summary = f"""User trip to {user_context['destination']} ({user_context['trip_dates']}), {user_context['travelers_count']} traveler(s)
+
+Available quotes:"""
+
+            for tier_name, quote in quotes.items():
+                quote_summary += f"""
+- {tier_name.title()}: ${quote['price']:.2f} SGD
+  Medical: ${quote['coverage'].get('medical_coverage', 0):,}
+  Trip Cancellation: ${quote['coverage'].get('trip_cancellation', 0):,}
+  Baggage: ${quote['coverage'].get('baggage_loss', 0):,}
+  Adventure Sports: {'Yes' if quote['coverage'].get('adventure_sports') else 'No'}"""
+
+            context_prompt = f"""{quote_summary}
+
+Recommended tier: {recommended_tier}
+
+Answer the user's question by explaining why this tier is suitable for their trip, comparing coverage options, and using the policy documents to provide detailed information about what's covered."""
+
         elif user_context.get("tier"):
             # User has selected a tier but not purchased yet
             tier_display = user_context['tier'].title()
             context_prompt = f"""User is considering the {tier_display} plan.
 Provide information about this tier and compare with other tiers if relevant."""
-        
+
         else:
             # User hasn't selected a tier yet - provide general comparison
             context_prompt = """User hasn't selected a tier yet. Provide general policy information and highlight differences between Standard, Elite, and Premier tiers."""
@@ -1755,11 +1807,11 @@ Provide information about this tier and compare with other tiers if relevant."""
 ---
 
 """
+        else:
+            # No RAG results - inform the LLM to use general knowledge
+            rag_context = "\n\nNote: No specific policy documents were found. Use your general knowledge about travel insurance to provide helpful information about typical coverage."
         
-        # Generate response using Groq LLM
-        from app.agents.llm_client import get_llm
-        llm = get_llm()
-        
+        # Generate response using Groq LLM (use llm_client from outer scope)
         system_prompt = f"""You are a helpful travel insurance policy expert. 
 
 {context_prompt}
@@ -1782,13 +1834,16 @@ Format your response with:
 - Citation to policy sections"""
 
         try:
-            response_obj = llm.invoke([
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_question}
+            # Use llm_client.llm (ChatGroq instance) directly
+            from langchain_core.messages import HumanMessage, SystemMessage
+
+            response_obj = llm_client.llm.invoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_question)
             ])
-            
+
             response_text = response_obj.content
-            
+
             # Add helpful footer if user has policy
             if user_context.get("has_policy"):
                 response_text += f"\n\n---\n📋 Your Policy: {user_context['policy_number']}\n📅 Valid: {user_context['effective_date']} to {user_context['expiry_date']}"
@@ -2350,31 +2405,14 @@ Format your response with:
         if awaiting_payment or (purchase_intent and quote_data and quote_data.get("quotes") and not payment_failed):
             print(f"   → payment_processor")
             return "payment_processor"
-        
-        # Priority 3: If pricing is complete (but no purchase intent), END
-        # Only END if pricing complete AND no purchase intent detected
-        if state.get("_pricing_complete", False) and not purchase_intent:
-            print(f"   → END (pricing complete, no purchase intent)")
-            log_conversation_metrics(state)
-            return END
 
-        # Priority 4: Human handoff (but skip if in active quote flow with confirmation)
+        # Priority 3: Check for non-quote intents BEFORE ending on pricing complete
+        # This allows users to ask questions about the policy even after getting a quote
         confirmation_received = state.get("confirmation_received", False)
         ready_for_pricing = state.get("_ready_for_pricing", False)
         in_active_quote_flow = confirmation_received or ready_for_pricing or state.get("trip_details", {}).get("destination")
-        
-        if state.get("requires_human") and not in_active_quote_flow:
-            print(f"   → customer_service")
-            return "customer_service"
-        
-        # Priority 5: Non-quote intents
-        if intent == "policy_explanation":
-            pass  # Handle policy explanation
-        
-        # Priority 2: Check if we're in an active quote flow first
-        # (confirmation_received, ready_for_pricing, and in_active_quote_flow already set above)
-        
-        # Priority 4.5: After document processing, route to needs_assessment
+
+        # Priority 3.5: After document processing, route to needs_assessment
         document_processed = state.get("_document_processed", False)
         if document_processed:
             # Check if we're coming from process_document node
@@ -2383,8 +2421,8 @@ Format your response with:
             # Clear the flag to prevent infinite loop
             state["_document_processed"] = False
             return "needs_assessment"
-        
-        # Priority 5: Non-quote intents
+
+        # Priority 4: Non-quote intents (handle these before END)
         if intent == "document_upload":
             print(f"   → process_document")
             return "process_document"
@@ -2398,8 +2436,20 @@ Format your response with:
             # Only route to human handoff if NOT in active quote flow
             print(f"   → customer_service (human_handoff intent, not in quote flow)")
             return "customer_service"
-        
-        # Priority 6: Quote flow with clear progression
+
+        # Priority 5: If pricing is complete (but no purchase intent and no other intent), END
+        # Only END if pricing complete AND no purchase/policy/claims intent detected
+        if state.get("_pricing_complete", False) and not purchase_intent:
+            print(f"   → END (pricing complete, no purchase intent)")
+            log_conversation_metrics(state)
+            return END
+
+        # Priority 6: Human handoff (but skip if in active quote flow with confirmation)
+        if state.get("requires_human") and not in_active_quote_flow:
+            print(f"   → customer_service")
+            return "customer_service"
+
+        # Priority 7: Quote flow with clear progression
         if intent == "quote" or intent == "" or in_active_quote_flow:
             # Re-get these values (already checked above but being explicit)
             confirmation_received = state.get("confirmation_received", False)

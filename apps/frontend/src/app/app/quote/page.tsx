@@ -68,7 +68,8 @@ interface ConversationState {
 
 // Utility function to extract Stripe checkout URLs from text
 function extractStripeCheckoutUrl(text: string): string | null {
-  const stripeUrlPattern = /https:\/\/checkout\.stripe\.com\/[^\s\)]+/gi
+  // Match Stripe checkout URLs - more flexible pattern to catch URLs with various endings
+  const stripeUrlPattern = /https:\/\/checkout\.stripe\.com\/[^\s\)\]\.,!?<>"]+/gi
   const match = text.match(stripeUrlPattern)
   return match ? match[0] : null
 }
@@ -101,7 +102,8 @@ function MessageContent({ content }: { content: string }) {
           href={stripeCheckoutUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-block bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 py-3 rounded-lg transition-colors shadow-md"
+          className="inline-block text-white font-semibold px-6 py-3 rounded-lg transition-colors shadow-md hover:opacity-90"
+          style={{ backgroundColor: '#dd2930' }}
         >
           Proceed to Payment
         </a>
@@ -644,17 +646,8 @@ export default function QuotePage() {
       // Store last AI response for voice playback
       lastAIResponseRef.current = data.message
 
-      // Check if the message contains a Stripe checkout URL
-      const stripeUrlMatch = data.message.match(/https:\/\/checkout\.stripe\.com\/[^\s]+/)
-      if (stripeUrlMatch) {
-        const checkoutUrl = stripeUrlMatch[0]
-        console.log('💳 Detected Stripe checkout URL, redirecting:', checkoutUrl)
-
-        // Auto-redirect to Stripe checkout after a short delay so user can see the message
-        setTimeout(() => {
-          window.location.href = checkoutUrl
-        }, 2000)
-      }
+      // Note: Stripe checkout URL will be rendered as a button in MessageContent component
+      // No auto-redirect - user clicks the button to open in new tab
 
       // Update conversation state for real-time UI updates
       if (data.state) {
@@ -756,7 +749,7 @@ export default function QuotePage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Chat Interface */}
           <div className="lg:col-span-2">
-            <div className="border border-gray-200 rounded-2xl h-[600px] flex flex-col bg-white shadow-sm">
+            <div className="border border-gray-200 rounded-2xl h-[calc(100vh-12rem)] flex flex-col bg-white shadow-sm">
               <div className="border-b border-gray-200 px-6 py-4">
                 <div className="flex items-center">
                   <div className="flex items-center justify-center h-10 w-10 rounded-full mr-3" style={{ backgroundColor: '#dd2930' }}>
@@ -806,10 +799,16 @@ export default function QuotePage() {
                           {/* Show content only if it exists */}
                           {message.content && (() => {
                             const { intro, plans, outro } = splitMessageContent(message.content)
+                            // If no plans, render entire content through MessageContent to handle Stripe URLs
+                            if (plans.length === 0) {
+                              return <MessageContent content={message.content} />
+                            }
                             return (
                               <div>
                                 {intro && (
-                                  <p className="text-sm leading-relaxed whitespace-pre-wrap mb-4">{intro}</p>
+                                  <div className="mb-4">
+                                    <MessageContent content={intro} />
+                                  </div>
                                 )}
                                 {plans.length > 0 && (
                                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
@@ -839,7 +838,9 @@ export default function QuotePage() {
                                   </div>
                                 )}
                                 {outro && (
-                                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{outro}</p>
+                                  <div>
+                                    <MessageContent content={outro} />
+                                  </div>
                                 )}
                               </div>
                             )
@@ -1055,7 +1056,13 @@ export default function QuotePage() {
 
           {/* Copilot Panel */}
           <div className="lg:col-span-1">
-            <CopilotPanel conversationState={conversationState} sessionId={currentSessionId || ''} />
+            <div className="border border-gray-200 rounded-2xl h-[calc(100vh-12rem)] flex flex-col bg-white shadow-sm overflow-hidden">
+              <div 
+                className="flex-1 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+              >
+                <CopilotPanel conversationState={conversationState} sessionId={currentSessionId || ''} />
+              </div>
+            </div>
           </div>
         </div>
       </div>
