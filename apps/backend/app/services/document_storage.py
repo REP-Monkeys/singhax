@@ -204,23 +204,67 @@ class DocumentStorageService:
             else:
                 return default
         
-        # Debug: Log the structure of extracted_json to help diagnose issues
+        # Extract trip_type from JSON or infer from return_date
+        trip_type = extracted_json.get("trip_type")
+        if not trip_type:
+            # Infer from return_date presence (backward compatibility)
+            return_flight_raw = extracted_json.get("flight_details", {}).get("return")
+            if return_flight_raw:
+                trip_type = "return"
+            else:
+                trip_type = "one_way"
+        
+        # Extract airline information (handle both new structured format and legacy formats)
         airline_raw = extracted_json.get("airline", {})
-        if isinstance(airline_raw, list):
-            print(f"⚠️  Warning: airline field is a list: {airline_raw}")
+        outbound_airline = {}
+        inbound_airline = {}
+        
+        # New format: airline.outbound and airline.inbound
+        if isinstance(airline_raw, dict) and "outbound" in airline_raw:
+            outbound_airline = safe_get_dict(airline_raw.get("outbound"), {})
+            inbound_airline = safe_get_dict(airline_raw.get("inbound"), {})
+        # Legacy format: array of airlines
+        elif isinstance(airline_raw, list):
+            print(f"⚠️  Warning: airline field is a list (legacy format): {airline_raw}")
+            if len(airline_raw) > 0:
+                outbound_airline = safe_get_dict(airline_raw[0], {})
+                # If return flight exists and multiple airlines, use second for inbound
+                if len(airline_raw) > 1 and trip_type == "return":
+                    inbound_airline = safe_get_dict(airline_raw[1], {})
+                elif trip_type == "return":
+                    # Same airline for both ways
+                    inbound_airline = outbound_airline.copy()
+        # Legacy format: single airline object
+        elif isinstance(airline_raw, dict):
+            outbound_airline = safe_get_dict(airline_raw, {})
+            if trip_type == "return":
+                inbound_airline = outbound_airline.copy()
+        
+        # Map airlines to flight numbers if needed (for backward compatibility)
+        flight_numbers = safe_get_dict(extracted_json.get("flight_details", {}).get("flight_numbers", {}), {})
+        outbound_flight_num = flight_numbers.get("outbound", "")
+        inbound_flight_num = flight_numbers.get("inbound", "")
+        
+        # If we have flight numbers but airline info is incomplete, try to infer from flight numbers
+        # Flight number prefix usually matches airline code (e.g., KE648 -> Korean Air KE)
+        if not outbound_airline.get("code") and outbound_flight_num:
+            # Could add logic here to map flight codes to airlines, but for now use what we have
+            pass
         
         flight_data = safe_get_dict(extracted_json.get("flight_details", {}), {})
         destination = safe_get_dict(extracted_json.get("destination", {}), {})
-        airline = safe_get_dict(airline_raw, {})
         booking_ref = safe_get_dict(extracted_json.get("booking_reference", {}), {})
         trip_value = safe_get_dict(extracted_json.get("trip_value", {}), {})
         trip_duration = safe_get_dict(extracted_json.get("trip_duration", {}), {})
         
         departure = safe_get_dict(flight_data.get("departure", {}), {})
         return_flight = safe_get_dict(flight_data.get("return", {}), {})
-        flight_numbers = safe_get_dict(flight_data.get("flight_numbers", {}), {})
         
         total_cost = safe_get_dict(trip_value.get("total_cost", {}), {})
+        
+        # Use outbound airline for backward compatibility fields
+        airline_name = outbound_airline.get("name")
+        airline_code = outbound_airline.get("code")
         
         flight = Flight(
             user_id=user_id,
@@ -234,8 +278,20 @@ class DocumentStorageService:
             file_content_type=file_storage_info.get("file_content_type") if file_storage_info else None,
             original_filename=file_storage_info.get("original_filename") if file_storage_info else None,
             
-            airline_name=airline.get("name"),
-            airline_code=airline.get("code"),
+            # Trip type
+            trip_type=trip_type,
+            
+            # Airline information (backward compatibility)
+            airline_name=airline_name,
+            airline_code=airline_code,
+            
+            # Outbound airline
+            outbound_airline_name=outbound_airline.get("name"),
+            outbound_airline_code=outbound_airline.get("code"),
+            
+            # Inbound airline (only for return trips)
+            inbound_airline_name=inbound_airline.get("name") if trip_type == "return" else None,
+            inbound_airline_code=inbound_airline.get("code") if trip_type == "return" else None,
             
             departure_date=self._parse_date(departure.get("date")),
             departure_time=departure.get("time"),

@@ -1,7 +1,7 @@
 """Payment model."""
 
-from sqlalchemy import Column, String, ForeignKey, Enum, Numeric, DateTime, Index
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, ForeignKey, Numeric, DateTime, Index, TypeDecorator
+from sqlalchemy.dialects.postgresql import UUID, ENUM
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
@@ -16,6 +16,45 @@ class PaymentStatus(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     EXPIRED = "expired"
+
+
+class PaymentStatusEnum(TypeDecorator):
+    """Type decorator to ensure enum values (lowercase) are used, not member names."""
+    impl = ENUM
+    cache_ok = True
+    
+    def __init__(self):
+        # Use the existing PostgreSQL enum type, but don't let SQLAlchemy serialize it
+        super().__init__(
+            PaymentStatus,
+            name='paymentstatus',
+            create_type=False,
+            native_enum=False  # Don't use native enum serialization - we'll handle it
+        )
+    
+    def process_bind_param(self, value, dialect):
+        """Convert enum to its value (lowercase string) when binding to database."""
+        if value is None:
+            return None
+        # Handle PaymentStatus enum - always return lowercase value
+        if isinstance(value, PaymentStatus):
+            return value.value  # Return 'pending', 'completed', etc. (lowercase)
+        # Handle string values - ensure lowercase
+        if isinstance(value, str):
+            value_lower = value.lower()
+            # Validate it's a valid enum value
+            if value_lower in ['pending', 'completed', 'failed', 'expired']:
+                return value_lower
+            return value_lower
+        return value
+    
+    def process_result_value(self, value, dialect):
+        """Convert database value back to enum when reading from database."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return PaymentStatus(value.lower())  # Convert 'pending' -> PaymentStatus.PENDING
+        return value
 
 
 class Payment(Base):
@@ -33,7 +72,9 @@ class Payment(Base):
     stripe_payment_intent = Column(String, nullable=True)  # Stripe payment intent ID
     
     # Payment details
-    payment_status = Column(Enum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False)
+    # Use String type and explicitly convert enum to lowercase string
+    # Database has paymentstatus enum, but we handle conversion in application code
+    payment_status = Column(String, default="pending", nullable=False)
     amount = Column(Numeric(10, 2), nullable=False)  # Amount in cents (e.g., 5000 = $50.00)
     currency = Column(String(3), default="SGD", nullable=False)
     product_name = Column(String, nullable=True)

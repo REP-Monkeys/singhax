@@ -9,7 +9,10 @@ import { PDFPreviewModal } from './PDFPreviewModal'
 export type DocumentType = 'flight' | 'hotel' | 'visa' | 'itinerary' | 'all'
 
 interface DocumentSummary {
-  airline?: string
+  airline?: string  // Backward compatibility
+  trip_type?: "one_way" | "return"
+  outbound_airline?: string
+  inbound_airline?: string
   departure_date?: string
   destination?: string
   hotel_name?: string
@@ -118,7 +121,23 @@ export function DocumentList({ authToken }: DocumentListProps) {
     const { summary, type } = doc
     switch (type) {
       case 'flight':
-        return `${summary.airline || 'Flight'}${summary.destination ? ` to ${summary.destination}` : ''}${summary.departure_date ? ` on ${formatDate(summary.departure_date)}` : ''}`
+        const tripType = summary.trip_type || 'one_way'  // Default to one_way if not provided
+        const outboundAirline = summary.outbound_airline || summary.airline || 'Flight'
+        const inboundAirline = summary.inbound_airline
+        const destination = summary.destination || ''
+        const departureDate = summary.departure_date ? ` on ${formatDate(summary.departure_date)}` : ''
+        
+        // Build airline display
+        let airlineDisplay = outboundAirline
+        if (tripType === 'return' && inboundAirline && inboundAirline !== outboundAirline) {
+          // Different airlines for going and returning
+          airlineDisplay = `${outboundAirline} → ${inboundAirline}`
+        }
+        
+        // Build trip type suffix
+        const tripTypeSuffix = tripType === 'return' ? ' (Return)' : ' (One-Way)'
+        
+        return `${airlineDisplay}${destination ? ` to ${destination}` : ''}${departureDate}${tripTypeSuffix}`
       case 'hotel':
         return `${summary.hotel_name || 'Hotel'}${summary.location ? ` in ${summary.location}` : ''}${summary.check_in_date ? ` - Check-in: ${formatDate(summary.check_in_date)}` : ''}`
       case 'visa':

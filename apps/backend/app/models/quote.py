@@ -18,6 +18,13 @@ class ProductType(str, enum.Enum):
     ANNUAL = "annual"
 
 
+class TierType(str, enum.Enum):
+    """Coverage tier types."""
+    STANDARD = "standard"
+    ELITE = "elite"
+    PREMIER = "premier"
+
+
 class QuoteStatus(str, enum.Enum):
     """Quote status enumeration."""
     DRAFT = "draft"
@@ -35,6 +42,7 @@ class Quote(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     trip_id = Column(UUID(as_uuid=True), ForeignKey("trips.id"), nullable=False)
     product_type = Column(Enum(ProductType), nullable=False)
+    selected_tier = Column(Enum(TierType), nullable=False, server_default="standard")
     
     # Traveler and activity data
     travelers = Column(JSONB, nullable=False)  # List of traveler data

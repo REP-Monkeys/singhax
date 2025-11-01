@@ -65,6 +65,82 @@ interface ConversationState {
   quote_data?: QuoteData
 }
 
+// Utility function to extract Stripe checkout URLs from text
+function extractStripeCheckoutUrl(text: string): string | null {
+  const stripeUrlPattern = /https:\/\/checkout\.stripe\.com\/[^\s\)]+/gi
+  const match = text.match(stripeUrlPattern)
+  return match ? match[0] : null
+}
+
+// Utility function to extract all URLs from text
+function extractUrls(text: string): string[] {
+  const urlPattern = /https?:\/\/[^\s\)]+/gi
+  return text.match(urlPattern) || []
+}
+
+// Component to render message content with clickable URLs
+function MessageContent({ content }: { content: string }) {
+  const stripeCheckoutUrl = extractStripeCheckoutUrl(content)
+  const allUrls = extractUrls(content)
+  
+  // If there's a Stripe checkout URL, extract it and render specially
+  if (stripeCheckoutUrl) {
+    // Split content at the Stripe URL (escape special regex characters)
+    const escapedUrl = stripeCheckoutUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const parts = content.split(new RegExp(escapedUrl, 'i'))
+    
+    return (
+      <div className="space-y-3">
+        {/* Render text before URL */}
+        {parts[0] && parts[0].trim() && (
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{parts[0]}</p>
+        )}
+        {/* Stripe checkout button */}
+        <a
+          href={stripeCheckoutUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-block bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 py-3 rounded-lg transition-colors shadow-md"
+        >
+          Proceed to Payment
+        </a>
+        {/* Render text after URL */}
+        {parts[1] && parts[1].trim() && (
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{parts[1]}</p>
+        )}
+      </div>
+    )
+  }
+  
+  // Render regular content with clickable URLs
+  if (allUrls.length > 0) {
+    const parts = content.split(/(https?:\/\/[^\s\)]+)/gi)
+    return (
+      <p className="text-sm leading-relaxed whitespace-pre-wrap">
+        {parts.map((part, index) => {
+          if (part.match(/^https?:\/\//i)) {
+            return (
+              <a
+                key={index}
+                href={part}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-indigo-600 hover:text-indigo-800 underline break-all"
+              >
+                {part}
+              </a>
+            )
+          }
+          return <span key={index}>{part}</span>
+        })}
+      </p>
+    )
+  }
+  
+  // No URLs, render plain text
+  return <p className="text-sm leading-relaxed whitespace-pre-wrap">{content}</p>
+}
+
 export default function QuotePage() {
   const { user, logout } = useAuth()
   const searchParams = useSearchParams()
@@ -511,6 +587,18 @@ export default function QuotePage() {
 
       setMessages(prev => [...prev, assistantMessage])
 
+      // Check if the message contains a Stripe checkout URL
+      const stripeUrlMatch = data.message.match(/https:\/\/checkout\.stripe\.com\/[^\s]+/)
+      if (stripeUrlMatch) {
+        const checkoutUrl = stripeUrlMatch[0]
+        console.log('💳 Detected Stripe checkout URL, redirecting:', checkoutUrl)
+
+        // Auto-redirect to Stripe checkout after a short delay so user can see the message
+        setTimeout(() => {
+          window.location.href = checkoutUrl
+        }, 2000)
+      }
+
       // Update conversation state for real-time UI updates
       if (data.state) {
         console.log('📊 Received state from backend:', data.state)
@@ -647,7 +735,7 @@ export default function QuotePage() {
                           )}
                           {/* Show content only if it exists */}
                           {message.content && (
-                            <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                            <MessageContent content={message.content} />
                           )}
                           <p className={`text-xs mt-2 ${message.role === 'user' ? 'text-gray-300' : 'text-gray-500'}`}>
                             {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -847,7 +935,7 @@ export default function QuotePage() {
 
           {/* Copilot Panel */}
           <div className="lg:col-span-1">
-            <CopilotPanel conversationState={conversationState} />
+            <CopilotPanel conversationState={conversationState} sessionId={currentSessionId || ''} />
           </div>
         </div>
       </div>

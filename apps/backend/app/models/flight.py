@@ -29,9 +29,20 @@ class Flight(Base):
     file_content_type = Column(String, nullable=True)  # MIME type (e.g., "application/pdf")
     original_filename = Column(String, nullable=True)  # Original uploaded filename
     
-    # Airline Information
+    # Trip Type
+    trip_type = Column(String, nullable=True)  # "one_way" or "return"
+    
+    # Airline Information (backward compatibility - uses outbound airline)
     airline_name = Column(String, nullable=True)
     airline_code = Column(String, nullable=True)
+    
+    # Outbound Airline Information
+    outbound_airline_name = Column(String, nullable=True)
+    outbound_airline_code = Column(String, nullable=True)
+    
+    # Inbound Airline Information (nullable for one-way trips)
+    inbound_airline_name = Column(String, nullable=True)
+    inbound_airline_code = Column(String, nullable=True)
     
     # Flight Details
     departure_date = Column(Date, nullable=True)

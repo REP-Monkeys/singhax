@@ -69,24 +69,29 @@ Current user message: "{message[:500]}"  # Truncate very long messages
 Classify the user's intent into ONE of these categories:
 
 1. "quote" - User wants to get a travel insurance quote or pricing information
-   Examples: "I need insurance", "How much does it cost?", "Quote for Japan trip"
-   IMPORTANT: If the assistant just asked for confirmation and user says "yes", "go ahead", "continue", "please proceed", "sounds good", etc., this is ALWAYS "quote" intent (user confirming to proceed with quote)
+   Examples: "I need insurance", "How much does it cost?", "Quote for Japan trip", "I want to go to Thailand", "Traveling to Singapore", "I'm going to Japan"
+   CRITICAL RULES:
+   - If user mentions a destination/trip WITHOUT asking about policy details, claims, or speaking to a human, this is ALWAYS "quote" intent
+   - If the assistant just asked for confirmation and user says "yes", "go ahead", "continue", "please proceed", "sounds good", etc., this is ALWAYS "quote" intent (user confirming to proceed with quote)
+   - Initial messages about trips/destinations are quote requests, not policy_explanation
 
 2. "purchase" - User wants to buy/purchase insurance after seeing quotes
-   Examples: "I'll take the Elite plan", "Buy it", "I want to purchase", "Checkout", "Get the standard plan"
+   Examples: "I'll take the Elite plan", "Buy it", "I want to purchase", "Checkout", "Get the standard plan", "Proceed to payment", "Payment", "Pay now", "I want to pay", "Ok payment", "Let's pay", "Ready to pay"
 
 3. "policy_explanation" - User has questions about coverage, policy terms, or what's included
-   Examples: "What does this cover?", "Am I covered for medical?", "Explain the policy"
+   Examples: "What does this cover?", "Am I covered for medical?", "Explain the policy", "What's included in the policy?"
+   NOTE: Only classify as policy_explanation if user is asking ABOUT the policy/coverage, NOT if they're starting a new quote request
 
 4. "claims_guidance" - User needs help filing a claim or has claim-related questions
    Examples: "How do I file a claim?", "I need to claim", "My luggage was lost"
 
-4. "document_upload" - User has uploaded a document (booking confirmation, receipt, claim document, etc.)
+5. "document_upload" - User has uploaded a document (booking confirmation, receipt, claim document, etc.)
    Examples: Messages containing "[User uploaded a document", "Extracted text:", booking confirmations, receipts, medical reports
 
-5. "human_handoff" - User EXPLICITLY requests to speak with a human agent, has a complaint, or the message is completely unclear/unrelated
+6. "human_handoff" - User EXPLICITLY requests to speak with a human agent, has a complaint, or the message is completely unclear/unrelated
    Examples: "I want to speak to a person", "This is too complicated", "Connect me to support"
    CRITICAL: Do NOT classify continuation/confirmation messages ("go ahead", "continue", "yes", "please proceed") as human_handoff if they're responding to a quote confirmation request
+   CRITICAL: Do NOT classify trip/destination mentions as human_handoff - these are quote requests
 
 Respond with ONLY a valid JSON object:
 {{

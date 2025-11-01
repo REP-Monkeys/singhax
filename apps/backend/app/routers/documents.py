@@ -219,8 +219,13 @@ async def get_document(
     # Add type-specific fields
     if doc_type == "flight":
         response.update({
+            "trip_type": document.trip_type,
             "airline_name": document.airline_name,
             "airline_code": document.airline_code,
+            "outbound_airline_name": document.outbound_airline_name,
+            "outbound_airline_code": document.outbound_airline_code,
+            "inbound_airline_name": document.inbound_airline_name,
+            "inbound_airline_code": document.inbound_airline_code,
             "departure_date": document.departure_date.isoformat() if document.departure_date else None,
             "departure_time": document.departure_time,
             "return_date": document.return_date.isoformat() if document.return_date else None,
@@ -365,7 +370,10 @@ def _get_document_summary(document, doc_type: str) -> dict:
     
     if doc_type == "flight":
         summary = {
-            "airline": document.airline_name,
+            "trip_type": document.trip_type,
+            "airline": document.airline_name,  # Backward compatibility
+            "outbound_airline": document.outbound_airline_name,
+            "inbound_airline": document.inbound_airline_name,
             "departure_date": document.departure_date.isoformat() if document.departure_date else None,
             "destination": f"{document.destination_city}, {document.destination_country}" if document.destination_city and document.destination_country else document.destination_country
         }

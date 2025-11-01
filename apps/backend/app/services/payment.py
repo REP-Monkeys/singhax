@@ -65,19 +65,27 @@ class PaymentService:
             product_name = f"Travel Insurance - {quote.product_type.value.title()}"
         
         # Create payment record
+        # Use lowercase string directly for enum compatibility
         payment = Payment(
             payment_intent_id=payment_intent_id,
             user_id=user.id,
             quote_id=quote.id,
-            payment_status=PaymentStatus.PENDING,
+            payment_status="pending",  # Lowercase string matches database enum
             amount=Decimal(amount_cents),
             currency=quote.currency or "SGD",
             product_name=product_name
         )
         
-        db.add(payment)
-        db.commit()
-        db.refresh(payment)
+        try:
+            db.add(payment)
+            db.commit()
+            db.refresh(payment)
+        except Exception as e:
+            db.rollback()
+            print(f"❌ Payment creation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         return {
             "payment_intent_id": payment_intent_id,
