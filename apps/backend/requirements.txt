@@ -30,7 +30,7 @@ langchain-groq==1.0.0
 
 # LLM and embeddings
 groq==0.33.0
-openai==1.3.8
+openai==1.12.0
 
 # Vector operations
 numpy==2.3.4
@@ -71,3 +71,6 @@ pdf2image==1.17.0
 
 # Supabase client for storage
 supabase==2.0.3
+
+# PDF processing for RAG ingestion
+pdfplumber==0.10.3

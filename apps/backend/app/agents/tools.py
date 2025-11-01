@@ -6,12 +6,97 @@ from sqlalchemy.orm import Session
 from pathlib import Path
 
 from app.services.pricing import PricingService
-from app.services.rag import RagService
+from app.services.rag import RAGService
 from app.services.claims import ClaimsService
 from app.services.handoff import HandoffService
 from app.services.payment import PaymentService
 from app.services.claims_intelligence import ClaimsIntelligenceService, ClaimsAnalyzer, NarrativeGenerator
 from app.services.ocr import OCRService
+
+
+def get_user_policy_context(user_id: str, db: Session) -> Dict[str, Any]:
+    """Get user's policy/tier context from database.
+    
+    Checks for active policy first, then falls back to recent quote.
+    
+    Args:
+        user_id: User UUID string
+        db: Database session
+        
+    Returns:
+        Dictionary with policy/tier context:
+        {
+            "has_policy": bool,
+            "tier": "standard"|"elite"|"premier",
+            "policy_number": "870000001-XXX" (if has_policy),
+            "coverage": {...},
+            "effective_date": date,
+            "expiry_date": date,
+            "destination": "Japan",
+            "travelers": [{...}],
+            "age": 35
+        }
+    """
+    import logging
+    from app.models.policy import Policy, PolicyStatus
+    from app.models.quote import Quote
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except (ValueError, AttributeError):
+        logger.error(f"Invalid user_id format: {user_id}")
+        return {"has_policy": False, "error": "Invalid user ID"}
+    
+    # Try to find active policy
+    policy = db.query(Policy).filter(
+        Policy.user_id == user_uuid,
+        Policy.status == PolicyStatus.ACTIVE
+    ).order_by(Policy.created_at.desc()).first()
+    
+    if policy:
+        quote = policy.quote
+        trip = quote.trip if quote else None
+        travelers = quote.travelers if quote else []
+        primary_age = travelers[0]['age'] if travelers else None
+        
+        return {
+            "has_policy": True,
+            "tier": quote.selected_tier if quote else "unknown",
+            "policy_number": policy.policy_number,
+            "coverage": policy.coverage or {},
+            "effective_date": policy.effective_date,
+            "expiry_date": policy.expiry_date,
+            "destination": trip.destinations[0] if (trip and trip.destinations) else "unknown",
+            "travelers": travelers,
+            "age": primary_age
+        }
+    
+    # No active policy - check for recent quote (user might be in quote flow)
+    quote = db.query(Quote).filter(
+        Quote.user_id == user_uuid
+    ).order_by(Quote.created_at.desc()).first()
+    
+    if quote:
+        trip = quote.trip
+        travelers = quote.travelers or []
+        primary_age = travelers[0]['age'] if travelers else None
+        
+        return {
+            "has_policy": False,
+            "tier": quote.selected_tier,
+            "coverage": quote.breakdown.get("coverage", {}) if quote.breakdown else {},
+            "destination": trip.destinations[0] if (trip and trip.destinations) else "unknown",
+            "travelers": travelers,
+            "age": primary_age
+        }
+    
+    # No policy or quote found
+    return {
+        "has_policy": False,
+        "tier": None
+    }
 
 
 class ConversationTools:
@@ -20,7 +105,7 @@ class ConversationTools:
     def __init__(self, db: Session, llm_client=None):
         self.db = db
         self.pricing_service = PricingService()
-        self.rag_service = RagService()
+        self.rag_service = RAGService(db=db)
         self.claims_service = ClaimsService()
         self.handoff_service = HandoffService()
         self.payment_service = PaymentService()
