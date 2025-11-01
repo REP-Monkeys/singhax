@@ -22,7 +22,7 @@ from app.schemas.chat import (
     ChatSessionState,
     ImageUploadResponse
 )
-from app.agents.graph import create_conversation_graph
+from app.agents.graph import create_conversation_graph, get_or_create_checkpointer
 from app.services.ocr import OCRService, JSONExtractor
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -165,6 +165,21 @@ async def send_message(
         import traceback
         traceback.print_exc()
         
+        # Check if user message is a simple greeting
+        user_message_lower = request.message.lower().strip()
+        greeting_words = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon", "good evening", "howdy"]
+        is_greeting = any(word in user_message_lower for word in greeting_words) and len(user_message_lower.split()) <= 3
+        
+        # If it's a greeting, respond friendly instead of showing error
+        if is_greeting:
+            return ChatMessageResponse(
+                session_id=request.session_id,
+                message="Hello! How can I help you today? I can help you get a travel insurance quote, explain your policy, or assist with claims.",
+                state={},
+                quote=None,
+                requires_human=False
+            )
+        
         # Try to return a helpful error message
         error_message = "I encountered an issue processing your message. "
         
@@ -274,8 +289,191 @@ async def get_session_state(
     try:
         graph = get_conversation_graph(db)
         config = {"configurable": {"thread_id": session_id}}
+        
+        # Get the full accumulated state - get_state() should return all messages
+        # LangGraph accumulates messages across checkpoints automatically
         state = graph.get_state(config)
+        
+        # Debug logging
+        print(f"\n🔍 [DEBUG] Retrieving session state for: {session_id[:8]}...")
+        print(f"   🔍 Graph state object: {state}")
+        print(f"   🔍 Has values: {hasattr(state, 'values')}")
+        if state:
+            messages = state.values.get("messages", [])
+            print(f"   📊 Found {len(messages)} messages in state")
+            print(f"   🔍 State values keys: {list(state.values.keys())}")
+            if messages:
+                # Count user vs assistant messages
+                user_count = sum(1 for m in messages if isinstance(m, HumanMessage))
+                assistant_count = sum(1 for m in messages if isinstance(m, AIMessage))
+                print(f"   📝 Message breakdown: {user_count} user, {assistant_count} assistant")
+                print(f"   📝 First message: {type(messages[0]).__name__} - {str(messages[0].content)[:50]}...")
+                print(f"   📝 Last message: {type(messages[-1]).__name__} - {str(messages[-1].content)[:50]}...")
+
+                # Print all message types and first 30 chars
+                print(f"   📋 All messages:")
+                for i, msg in enumerate(messages):
+                    msg_type = type(msg).__name__
+                    content_preview = str(msg.content)[:30] if hasattr(msg, 'content') else str(msg)[:30]
+                    print(f"      [{i}] {msg_type}: {content_preview}...")
+                
+                # If we're missing assistant messages, that's a problem - get_state() should include them
+                # Don't try reconstruction if we have assistant messages but just few total messages
+                if assistant_count == 0 and user_count > 0:  # Missing assistant messages is a real issue
+                    print(f"   ⚠️ Missing assistant messages! Found {user_count} user but 0 assistant - checking checkpoints...")
+                    try:
+                        # Access the checkpointer directly to list all checkpoints
+                        checkpointer = get_or_create_checkpointer()
+                        if checkpointer:
+                            # Try to get all checkpoints for this thread
+                            checkpoints = list(checkpointer.list(config, limit=None))
+                            print(f"   📋 Found {len(checkpoints)} checkpoints")
+                            
+                            # Reconstruct full message history from all checkpoints
+                            # CheckpointTuple structure: (checkpoint, metadata) where checkpoint has channel_values
+                            all_messages = []
+                            seen_contents = set()  # For deduplication by content
+                            
+                            # Try to get state from the latest checkpoint (should have all accumulated messages)
+                            # Process checkpoints in reverse order (newest first) - latest should have all messages
+                            if checkpoints:
+                                # Debug: inspect checkpoint structure
+                                latest_cp = checkpoints[-1]  # Last checkpoint should be latest
+                                print(f"   🔍 Latest checkpoint type: {type(latest_cp)}")
+                                if hasattr(latest_cp, '_fields'):
+                                    print(f"   🔍 CheckpointTuple fields: {latest_cp._fields}")
+                                
+                                # Try to get state from latest checkpoint - it should have full accumulated messages
+                                latest_checkpoint_success = False
+                                try:
+                                    # Access the latest checkpoint's channel_values directly
+                                    latest_checkpoint_obj = None
+                                    if hasattr(latest_cp, 'checkpoint'):
+                                        latest_checkpoint_obj = latest_cp.checkpoint
+                                    elif hasattr(latest_cp, '_asdict'):
+                                        cp_dict = latest_cp._asdict()
+                                        latest_checkpoint_obj = cp_dict.get('checkpoint', latest_cp)
+                                    elif isinstance(latest_cp, tuple) and len(latest_cp) >= 1:
+                                        latest_checkpoint_obj = latest_cp[0]
+                                    else:
+                                        latest_checkpoint_obj = latest_cp
+                                    
+                                    # Get channel_values from latest checkpoint
+                                    latest_channel_values = None
+                                    if hasattr(latest_checkpoint_obj, 'channel_values'):
+                                        latest_channel_values = latest_checkpoint_obj.channel_values
+                                    elif isinstance(latest_checkpoint_obj, dict):
+                                        latest_channel_values = latest_checkpoint_obj.get('channel_values')
+                                    else:
+                                        latest_channel_values = getattr(latest_checkpoint_obj, 'channel_values', None)
+                                    
+                                    if latest_channel_values:
+                                        latest_messages = []
+                                        if isinstance(latest_channel_values, dict):
+                                            latest_messages = latest_channel_values.get('messages', [])
+                                        elif hasattr(latest_channel_values, 'get'):
+                                            latest_messages = latest_channel_values.get('messages', [])
+                                        elif hasattr(latest_channel_values, 'messages'):
+                                            latest_messages = latest_channel_values.messages
+                                        
+                                        if latest_messages and len(latest_messages) > len(messages):
+                                            latest_user_count = sum(1 for m in latest_messages if isinstance(m, HumanMessage))
+                                            latest_assistant_count = sum(1 for m in latest_messages if isinstance(m, AIMessage))
+                                            print(f"   📊 Latest checkpoint: {len(latest_messages)} messages ({latest_user_count} user, {latest_assistant_count} assistant)")
+                                            
+                                            if latest_assistant_count > 0:  # Only use if we have assistant messages
+                                                print(f"   ✅ Got {len(latest_messages)} messages from latest checkpoint (was {len(messages)})")
+                                                messages = latest_messages
+                                                state.values["messages"] = messages
+                                                latest_checkpoint_success = True
+                                            else:
+                                                print(f"   ⚠️  Latest checkpoint missing assistant messages - skipping")
+                                except Exception as e:
+                                    print(f"   ⚠️ Could not get state from latest checkpoint: {e}")
+                                    import traceback
+                                    traceback.print_exc()
+                            
+                            # Fallback: manually reconstruct from all checkpoints if latest checkpoint didn't work
+                            if not latest_checkpoint_success:
+                                for checkpoint_tuple in checkpoints:
+                                    try:
+                                        # CheckpointTuple is a named tuple: (checkpoint, metadata)
+                                        # Access the checkpoint object - try different access patterns
+                                        checkpoint_obj = None
+                                        if hasattr(checkpoint_tuple, 'checkpoint'):
+                                            checkpoint_obj = checkpoint_tuple.checkpoint
+                                        elif hasattr(checkpoint_tuple, '_asdict'):
+                                            # Named tuple - convert to dict to access
+                                            cp_dict = checkpoint_tuple._asdict()
+                                            checkpoint_obj = cp_dict.get('checkpoint', checkpoint_tuple)
+                                        elif isinstance(checkpoint_tuple, tuple) and len(checkpoint_tuple) >= 1:
+                                            # Regular tuple - first element is checkpoint
+                                            checkpoint_obj = checkpoint_tuple[0]
+                                        else:
+                                            checkpoint_obj = checkpoint_tuple
+                                        
+                                        # Get channel_values from checkpoint
+                                        channel_values = None
+                                        if hasattr(checkpoint_obj, 'channel_values'):
+                                            channel_values = checkpoint_obj.channel_values
+                                        elif isinstance(checkpoint_obj, dict):
+                                            channel_values = checkpoint_obj.get('channel_values')
+                                        else:
+                                            # Try accessing as attribute
+                                            channel_values = getattr(checkpoint_obj, 'channel_values', None)
+                                        
+                                        if channel_values:
+                                            # Extract messages from channel_values
+                                            checkpoint_messages = []
+                                            if isinstance(channel_values, dict):
+                                                checkpoint_messages = channel_values.get('messages', [])
+                                            elif hasattr(channel_values, 'get'):
+                                                checkpoint_messages = channel_values.get('messages', [])
+                                            elif hasattr(channel_values, 'messages'):
+                                                checkpoint_messages = channel_values.messages
+                                            
+                                            # Add unique messages to our list
+                                            for msg in checkpoint_messages:
+                                                if msg:
+                                                    msg_content = msg.content if hasattr(msg, 'content') else str(msg)
+                                                    # Deduplicate by content hash
+                                                    content_hash = hash(msg_content)
+                                                    if content_hash not in seen_contents:
+                                                        seen_contents.add(content_hash)
+                                                        all_messages.append(msg)
+                                    except Exception as e:
+                                        print(f"   ⚠️ Error processing checkpoint: {e}")
+                                        continue
+                                
+                                # Count messages by type in reconstructed list
+                                reconstructed_user_count = sum(1 for m in all_messages if isinstance(m, HumanMessage))
+                                reconstructed_assistant_count = sum(1 for m in all_messages if isinstance(m, AIMessage))
+                                print(f"   📊 Reconstructed breakdown: {reconstructed_user_count} user, {reconstructed_assistant_count} assistant")
+                                
+                                # Only use reconstructed messages if:
+                                # 1. We have more total messages, AND
+                                # 2. We have at least some assistant messages (to avoid losing assistant responses)
+                                if len(all_messages) > len(messages) and reconstructed_assistant_count > 0:
+                                    print(f"   ✅ Reconstructed {len(all_messages)} messages from checkpoints (was {len(messages)})")
+                                    messages = all_messages
+                                    # Update state with full messages
+                                    state.values["messages"] = messages
+                                elif len(all_messages) > len(messages) and reconstructed_assistant_count == 0:
+                                    print(f"   ⚠️  Reconstructed more messages but missing assistant messages - keeping original")
+                                    # Keep original messages if reconstruction lost assistant messages
+                                else:
+                                    print(f"   ℹ️  Checkpoint reconstruction found {len(all_messages)} messages (same or fewer than get_state)")
+                    except Exception as checkpoint_error:
+                        print(f"   ⚠️ Could not reconstruct from checkpoints: {checkpoint_error}")
+                        import traceback
+                        traceback.print_exc()
+        else:
+            print(f"   ⚠️ State is None")
+            
     except Exception as e:
+        print(f"❌ Error retrieving session state: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve session: {str(e)}"
@@ -290,10 +488,24 @@ async def get_session_state(
     
     # Format messages for response
     formatted_messages = []
-    for msg in state.values.get("messages", []):
+    messages_list = state.values.get("messages", [])
+    
+    # Final validation: ensure we have both user and assistant messages if there are user messages
+    final_user_count = sum(1 for m in messages_list if isinstance(m, HumanMessage))
+    final_assistant_count = sum(1 for m in messages_list if isinstance(m, AIMessage))
+    print(f"   📤 Formatting {len(messages_list)} messages for response ({final_user_count} user, {final_assistant_count} assistant)")
+    
+    # If we have user messages but no assistant messages, that's a problem
+    if final_user_count > 0 and final_assistant_count == 0:
+        print(f"   ⚠️ WARNING: Final message list has {final_user_count} user messages but 0 assistant messages!")
+        print(f"   ⚠️ This indicates a problem with message retrieval - assistant responses may be missing")
+    
+    for msg in messages_list:
         role = "user" if isinstance(msg, HumanMessage) else "assistant"
         content = msg.content if hasattr(msg, 'content') else str(msg)
         formatted_messages.append({"role": role, "content": content})
+    
+    print(f"   ✅ Returning {len(formatted_messages)} formatted messages")
     
     return ChatSessionState(
         session_id=session_id,
@@ -519,9 +731,19 @@ async def upload_image(
                 import traceback
                 traceback.print_exc()
 
-        # Prepare response - Simple message to trigger card display
+        # Prepare response - Human-friendly message to trigger card display
         # Frontend will use the extracted_json from ocr_result to display the card
-        message_suggestion = "SHOW_EXTRACTION_CARD"  # Special marker for frontend to display card
+        document_type = extracted_json.get("document_type", "document")
+        if document_type == "flight_confirmation":
+            message_suggestion = "I've extracted the information from your flight booking. Please review the details below:"
+        elif document_type == "hotel_booking":
+            message_suggestion = "I've extracted the information from your hotel booking. Please review the details below:"
+        elif document_type == "visa_application":
+            message_suggestion = "I've extracted the information from your visa. Please review the details below:"
+        elif document_type == "itinerary":
+            message_suggestion = "I've extracted the information from your itinerary. Please review the details below:"
+        else:
+            message_suggestion = "I've extracted the information from your document. Please review the details below:"
         
         # Enhance OCR result with extracted JSON
         enhanced_ocr_result = {

@@ -1,10 +1,11 @@
 """LangGraph conversation orchestration."""
 
-from typing import Dict, Any, List, Optional, TypedDict
+from typing import Dict, Any, List, Optional, TypedDict, Annotated
 from datetime import datetime, date
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.graph.message import add_messages
 import os
 import uuid
 import dateparser
@@ -161,7 +162,7 @@ def parse_date_safe(date_string: str, prefer_future: bool = True, reference_date
 
 class ConversationState(TypedDict):
     """State for conversation graph."""
-    messages: List[BaseMessage]
+    messages: Annotated[List[BaseMessage], add_messages]
     user_id: str
     session_id: str  # Chat session ID for linking to trips
     current_intent: str
@@ -335,6 +336,19 @@ def create_conversation_graph(db) -> StateGraph:
             last_message = state["messages"][-1]
             user_input = last_message.content if hasattr(last_message, 'content') else str(last_message)
             
+            # Check for simple greetings BEFORE calling LLM
+            user_input_lower = user_input.lower().strip()
+            greeting_words = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon", "good evening", "howdy"]
+            is_greeting = any(word in user_input_lower for word in greeting_words) and len(user_input_lower.split()) <= 3
+            
+            # If it's a greeting and we have no trip info, respond friendly
+            if is_greeting and not any([trip.get("destination"), trip.get("departure_date"), trip.get("return_date"), travelers.get("ages")]):
+                response = "Hello! How can I help you today? I can help you get a travel insurance quote, explain your policy, or assist with claims."
+                state["current_question"] = ""
+                print(f"   💬 Responding to greeting: {response}")
+                state["messages"].append(AIMessage(content=response))
+                return state
+            
             # Prepare current slots for extraction
             current_slots = {
                 "destination": trip.get("destination"),
@@ -345,7 +359,19 @@ def create_conversation_graph(db) -> StateGraph:
             }
             
             # Extract information from user message using LLM
-            extracted = llm_client.extract_trip_info(user_input, current_slots)
+            try:
+                extracted = llm_client.extract_trip_info(user_input, current_slots)
+            except Exception as e:
+                print(f"   ⚠️  LLM extraction failed: {e}")
+                # If LLM fails and we have no trip info, treat as greeting
+                if not any([trip.get("destination"), trip.get("departure_date"), trip.get("return_date"), travelers.get("ages")]):
+                    response = "Hello! How can I help you today? I can help you get a travel insurance quote, explain your policy, or assist with claims."
+                    state["current_question"] = ""
+                    print(f"   💬 Responding to greeting after LLM error: {response}")
+                    state["messages"].append(AIMessage(content=response))
+                    return state
+                # Otherwise return empty extraction
+                extracted = {}
 
             # CRITICAL: Check if document data was uploaded and merge it
             document_data = state.get("document_data", [])
