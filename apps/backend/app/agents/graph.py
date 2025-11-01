@@ -1747,6 +1747,11 @@ What would you like to know more about?"""
             print(f"   → customer_service")
             return "customer_service"
         
+        # Priority 5: Non-quote intents
+        if intent == "policy_explanation":
+            pass  # Handle policy explanation
+        
+        # Priority 2: Check if we're in an active quote flow first
         # Check if we're in an active quote flow first
         # If user has confirmed and we're ready for pricing, prioritize quote flow over handoff
         confirmation_received = state.get("confirmation_received", False)

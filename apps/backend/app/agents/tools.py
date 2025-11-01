@@ -325,8 +325,8 @@ class ConversationTools:
             traveler_details = quote.breakdown.get("traveler_details")
             selected_tier = quote.breakdown.get("selected_tier", "elite")
         
-        # Attempt to use Ancileo Purchase API if we have the necessary data
-        if ancileo_ref and traveler_details:
+        # Attempt to use Ancileo Purchase API if we have ancileo_ref
+        if ancileo_ref:
             try:
                 logger.info(f"Attempting Ancileo Purchase API for payment {payment_intent_id}")
                 
@@ -336,54 +336,83 @@ class ConversationTools:
                     logger.warning(f"Quote is {quote_age_hours:.1f} hours old, may be expired")
                     # Continue anyway - Ancileo will reject if truly expired
                 
+                # Get user info
+                from app.models.user import User
+                user = self.db.query(User).filter(User.id == payment.user_id).first()
+                
+                if not user:
+                    logger.error(f"User not found for payment {payment_intent_id}")
+                    raise ValueError("User not found")
+                
+                # Create minimal traveler details from logged-in user
+                # Per empirical testing: only firstName, lastName, email, id required
+                # Split name into firstName and lastName (handle cases with/without space)
+                name_parts = (user.name or "Guest Traveler").split(' ', 1)
+                first_name = name_parts[0]
+                last_name = name_parts[1] if len(name_parts) > 1 else ""
+                
+                minimal_traveler = {
+                    "id": "1",
+                    "firstName": first_name,
+                    "lastName": last_name or ".",  # Ancileo might require non-empty lastName
+                    "email": user.email
+                }
+                
+                logger.info(f"Using minimal traveler data from user account: {user.email}")
+                
+                # Check if complex traveler details were collected (optional enhancement)
+                if traveler_details and traveler_details.get("insureds"):
+                    # Use the collected data if available
+                    insureds = traveler_details.get("insureds", [])
+                    main_contact = traveler_details.get("main_contact", minimal_traveler)
+                    logger.info(f"Using collected traveler details ({len(insureds)} traveler(s))")
+                else:
+                    # Use minimal data from user account
+                    insureds = [minimal_traveler]
+                    main_contact = minimal_traveler
+                    logger.info("Using minimal traveler data from user account")
+                
                 # Initialize adapter
                 adapter = AncileoAdapter()
                 
-                # Prepare insureds and main contact
-                insureds = traveler_details.get("insureds", [])
-                main_contact = traveler_details.get("main_contact")
+                # Call Ancileo Purchase API
+                bind_result = adapter.bind_policy({
+                    "ancileo_reference": ancileo_ref,
+                    "selected_tier": selected_tier,
+                    "insureds": insureds,
+                    "main_contact": main_contact
+                })
                 
-                if not insureds or not main_contact:
-                    logger.warning("Traveler details incomplete, falling back to mock policy")
-                else:
-                    # Call Ancileo Purchase API
-                    bind_result = adapter.bind_policy({
-                        "ancileo_reference": ancileo_ref,
-                        "selected_tier": selected_tier,
-                        "insureds": insureds,
-                        "main_contact": main_contact
-                    })
-                    
-                    # Extract policy details from Ancileo response
-                    policy_number = bind_result.get("policy_number")
-                    coverage = bind_result.get("coverage", {})
-                    named_insureds = bind_result.get("named_insureds", [])
-                    
-                    logger.info(f"Successfully created Ancileo policy: {policy_number}")
-                    
-                    # Create Policy record with Ancileo data
-                    policy = Policy(
-                        user_id=payment.user_id,
-                        quote_id=quote.id,
-                        policy_number=policy_number,
-                        coverage=coverage,
-                        named_insureds=named_insureds,
-                        effective_date=trip.start_date,
-                        expiry_date=trip.end_date,
-                        status=PolicyStatus.ACTIVE,
-                        cooling_off_days=14
-                    )
-                    
-                    self.db.add(policy)
-                    self.db.commit()
-                    self.db.refresh(policy)
-                    
-                    return {
-                        "success": True,
-                        "policy_number": policy_number,
-                        "policy_id": str(policy.id),
-                        "source": "ancileo_api"
-                    }
+                # Extract policy details from Ancileo response
+                policy_number = bind_result.get("policy_number")
+                coverage = bind_result.get("coverage", {})
+                named_insureds = bind_result.get("named_insureds", [])
+                
+                logger.info(f"Successfully created Ancileo policy: {policy_number}")
+                
+                # Create Policy record with Ancileo data
+                policy = Policy(
+                    user_id=payment.user_id,
+                    quote_id=quote.id,
+                    policy_number=policy_number,
+                    coverage=coverage,
+                    named_insureds=named_insureds,
+                    effective_date=trip.start_date,
+                    expiry_date=trip.end_date,
+                    status=PolicyStatus.ACTIVE,
+                    cooling_off_days=14
+                )
+                
+                self.db.add(policy)
+                self.db.commit()
+                self.db.refresh(policy)
+                
+                return {
+                    "success": True,
+                    "policy_number": policy_number,
+                    "policy_id": str(policy.id),
+                    "source": "ancileo_api"
+                }
                     
             except AncileoQuoteExpiredError:
                 logger.error(f"Ancileo quote expired for payment {payment_intent_id}")
@@ -400,10 +429,7 @@ class ConversationTools:
                 # Fall through to mock policy creation
                 logger.warning("Falling back to mock policy due to unexpected error")
         else:
-            if not ancileo_ref:
-                logger.warning(f"No Ancileo reference found for quote {quote.id}")
-            if not traveler_details:
-                logger.warning(f"No traveler details found for quote {quote.id}")
+            logger.warning(f"No Ancileo reference found for quote {quote.id}")
             logger.info("Creating mock policy (Ancileo Purchase API not available)")
         
         # Fallback: Create mock policy (for compatibility until traveler collection is implemented)
@@ -593,7 +619,6 @@ class ConversationTools:
                 "error": str(e),
                 "activity": activity
             }
-    
     def extract_text_from_image(
         self,
         image_path: str,
