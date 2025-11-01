@@ -39,7 +39,7 @@ class QuoteResponse(QuoteBase):
     id: UUID
     user_id: UUID
     trip_id: UUID
-    selected_tier: TierType
+    selected_tier: str  # Changed from TierType to str since DB stores lowercase string
     risk_breakdown: Optional[Dict[str, Any]] = None
     price_min: Optional[Decimal] = None
     price_max: Optional[Decimal] = None
@@ -50,6 +50,6 @@ class QuoteResponse(QuoteBase):
     insurer_ref: Optional[str] = None
     expires_at: Optional[datetime] = None
     created_at: datetime
-    
+
     class Config:
         from_attributes = True

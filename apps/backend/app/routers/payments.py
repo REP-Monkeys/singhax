@@ -104,13 +104,11 @@ async def create_checkout_session(
         from decimal import Decimal
         from app.models.quote import QuoteStatus, ProductType
 
-        # Convert selected_tier to enum for comparison
-        tier_enum = TierType(selected_tier)
-
+        # selected_tier is already lowercase string from request, use directly
         existing_quote = db.query(Quote).filter(
             Quote.trip_id == trip_id,
             Quote.price_firm == Decimal(str(price)),
-            Quote.selected_tier == tier_enum,
+            Quote.selected_tier == selected_tier,  # Use lowercase string directly
             Quote.status == QuoteStatus.FIRMED
         ).first()
 
@@ -130,7 +128,7 @@ async def create_checkout_session(
                 currency="SGD",
                 status=QuoteStatus.FIRMED,
                 product_type=ProductType.SINGLE,  # Use SINGLE for single-trip insurance
-                selected_tier=tier_enum,  # NEW: Set the selected tier enum field
+                selected_tier=selected_tier,  # Use lowercase string directly (database has enum, we use String column)
                 travelers=travelers_data,
                 activities=[{"adventure_sports": preferences.get("adventure_sports", False)}],
                 breakdown={

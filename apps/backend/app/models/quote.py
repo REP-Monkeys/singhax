@@ -42,7 +42,8 @@ class Quote(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     trip_id = Column(UUID(as_uuid=True), ForeignKey("trips.id"), nullable=False)
     product_type = Column(Enum(ProductType), nullable=False)
-    selected_tier = Column(Enum(TierType), nullable=False, server_default="standard")
+    # Use String type to avoid enum serialization issues (database has tiertype enum, we handle conversion)
+    selected_tier = Column(String, nullable=False, server_default="standard")
     
     # Traveler and activity data
     travelers = Column(JSONB, nullable=False)  # List of traveler data
