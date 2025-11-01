@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Mic, Square, Volume2, Loader2 } from 'lucide-react'
 import { useAudioRecorder } from '@/hooks/useAudioRecorder'
@@ -26,6 +26,8 @@ export function VoiceButton({
   const [mode, setMode] = useState<'idle' | 'recording' | 'processing' | 'speaking'>('idle')
   const [transcript, setTranscript] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [autoRestartDisabled, setAutoRestartDisabled] = useState(false)
+  const audioEndCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
   const recorder = useAudioRecorder()
   const player = useAudioPlayer()
@@ -42,6 +44,8 @@ export function VoiceButton({
     console.log('🎤 [VoiceButton] Starting recording...')
     setError(null)
     setTranscript('')
+    // Re-enable auto-restart when user manually starts recording (they want to use voice again)
+    setAutoRestartDisabled(false)
 
     try {
       await recorder.startRecording()
@@ -67,10 +71,21 @@ export function VoiceButton({
 
     // Check size
     const sizeMB = audioBlob.size / (1024 * 1024)
+    const sizeKB = audioBlob.size / 1024
     console.log(`📊 [VoiceButton] Audio blob size: ${sizeMB.toFixed(2)}MB, type: ${audioBlob.type}`)
 
     if (sizeMB > 5) {
       setError('Recording too long. Please keep it under 5MB (about 2 minutes).')
+      setMode('idle')
+      return
+    }
+
+    // Check if audio blob is too small (likely no audio captured)
+    // Typical silent/empty recordings are < 1KB, actual audio is usually > 5KB
+    if (sizeKB < 1) {
+      console.log('⚠️ [VoiceButton] Audio blob too small, likely no audio captured. Silently ignoring.')
+      // User manually stopped with no audio - disable auto-restart
+      setAutoRestartDisabled(true)
       setMode('idle')
       return
     }
@@ -93,7 +108,12 @@ export function VoiceButton({
       const transcribeResult = await transcribeAudio(audioBlob, token)
       
       if (!transcribeResult.success || !transcribeResult.text) {
-        throw new Error('Could not understand audio. Please try again.')
+        // Check if this is likely a "no audio" case - silently ignore
+        console.log('⚠️ [VoiceButton] No transcription result, likely no audio detected. Silently ignoring.')
+        // User manually stopped with no audio - disable auto-restart
+        setAutoRestartDisabled(true)
+        setMode('idle')
+        return
       }
       
       const userText = transcribeResult.text
@@ -128,10 +148,12 @@ export function VoiceButton({
           setMode('idle')
           setTranscript('')
 
-          // Auto-start recording for next question after 1 second delay
-          setTimeout(() => {
-            handleStartRecording()
-          }, 1000)
+          // Auto-start recording for next question after 1 second delay (only if auto-restart is enabled)
+          if (!autoRestartDisabled) {
+            setTimeout(() => {
+              handleStartRecording()
+            }, 1000)
+          }
 
           return // Skip the rest of audio handling
         } else {
@@ -150,23 +172,47 @@ export function VoiceButton({
       )
       
       // Step 7: Wait for audio to finish
-      const checkEnded = setInterval(() => {
+      audioEndCheckIntervalRef.current = setInterval(() => {
         if (!player.isPlaying) {
-          clearInterval(checkEnded)
+          if (audioEndCheckIntervalRef.current) {
+            clearInterval(audioEndCheckIntervalRef.current)
+            audioEndCheckIntervalRef.current = null
+          }
           console.log('✅ Audio ended, ready for next question')
           setMode('idle')
           setTranscript('')
           
-          // Auto-start recording for next question after 1 second delay
-          setTimeout(() => {
-            handleStartRecording()
-          }, 1000)
+          // Auto-start recording for next question after 1 second delay (only if auto-restart is enabled)
+          if (!autoRestartDisabled) {
+            setTimeout(() => {
+              handleStartRecording()
+            }, 1000)
+          }
         }
       }, 100)
       
     } catch (err) {
       console.error('Voice processing error:', err)
-      setError(err instanceof Error ? err.message : 'Failed to process audio')
+      
+      // Check if error is related to no audio being detected
+      const errorMessage = err instanceof Error ? err.message : 'Failed to process audio'
+      const isNoAudioError = 
+        errorMessage.toLowerCase().includes('no audio') ||
+        errorMessage.toLowerCase().includes('silence') ||
+        errorMessage.toLowerCase().includes('could not understand audio') ||
+        errorMessage.toLowerCase().includes('empty') ||
+        sizeKB < 5 // If blob is very small, likely no audio
+      
+      if (isNoAudioError) {
+        console.log('⚠️ [VoiceButton] No audio detected. Silently ignoring error.')
+        // User manually stopped with no audio - disable auto-restart
+        setAutoRestartDisabled(true)
+        setMode('idle')
+        return
+      }
+      
+      // Only show error for actual processing failures
+      setError(errorMessage)
       setMode('idle')
     }
   }
@@ -195,8 +241,8 @@ export function VoiceButton({
         <Button
           onClick={handleStopRecording}
           size="sm"
-          variant="destructive"
-          className="gap-2 animate-pulse rounded-full h-10 px-4"
+          className="gap-2 animate-pulse rounded-full h-10 px-4 text-white"
+          style={{ backgroundColor: '#dd2930' }}
           title="Stop recording"
         >
           <Square className="w-4 h-4" />
@@ -207,9 +253,9 @@ export function VoiceButton({
       {mode === 'processing' && (
         <Button
           size="sm"
-          variant="outline"
           disabled
-          className="gap-2 rounded-full h-10 w-10 p-0"
+          className="gap-2 rounded-full h-10 w-10 p-0 text-white"
+          style={{ backgroundColor: '#dd2930' }}
           title="Processing..."
         >
           <Loader2 className="w-4 h-4 animate-spin" />
@@ -219,12 +265,19 @@ export function VoiceButton({
       {mode === 'speaking' && (
         <Button
           onClick={() => {
+            // Clear the interval that checks for audio end
+            if (audioEndCheckIntervalRef.current) {
+              clearInterval(audioEndCheckIntervalRef.current)
+              audioEndCheckIntervalRef.current = null
+            }
             player.stop()
+            // User manually stopped audio - disable auto-restart
+            setAutoRestartDisabled(true)
             setMode('idle')
           }}
           size="sm"
-          variant="outline"
-          className="gap-2 rounded-full h-10 w-10 p-0 animate-pulse"
+          className="gap-2 rounded-full h-10 w-10 p-0 animate-pulse text-white"
+          style={{ backgroundColor: '#dd2930' }}
           title="Speaking... (click to stop)"
         >
           <Volume2 className="w-4 h-4" />
