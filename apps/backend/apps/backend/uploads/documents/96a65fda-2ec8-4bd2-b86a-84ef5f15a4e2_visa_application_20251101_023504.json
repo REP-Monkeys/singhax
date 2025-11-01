@@ -1,0 +1,73 @@
+{
+  "session_id": "96a65fda-2ec8-4bd2-b86a-84ef5f15a4e2",
+  "document_type": "visa_application",
+  "extracted_at": "2025-11-01T02:35:04.600624Z",
+  "source_filename": "sample_visa_application.pdf",
+  "visa_details": {
+    "visa_type": "Tourist",
+    "destination_country": null,
+    "entry_type": null,
+    "validity_period": null,
+    "confidence": 0.8
+  },
+  "applicant": {
+    "name": {
+      "first": null,
+      "last": null,
+      "full": "SAMPLE TEST USER",
+      "confidence": 0.95
+    },
+    "date_of_birth": "1990-01-01",
+    "age": 109,
+    "passport_number": "TEST000000000",
+    "nationality": "Sample Country",
+    "confidence": 0.92
+  },
+  "trip_purpose": {
+    "primary_purpose": "Tourism",
+    "detailed_purpose": null,
+    "is_business": false,
+    "is_medical_treatment": false,
+    "confidence": 0.9
+  },
+  "planned_trip": {
+    "intended_arrival_date": "2099-12-20",
+    "intended_departure_date": "2099-12-27",
+    "duration_days": 7,
+    "destination_cities": null,
+    "confidence": 0.91
+  },
+  "accommodation_info": {
+    "has_hotel_booking": true,
+    "hotel_name": "Sample Grand Hotel",
+    "hotel_address": "123 Test Street, Sample City",
+    "confidence": 0.88
+  },
+  "financial_support": {
+    "has_sufficient_funds": true,
+    "estimated_trip_cost": {
+      "amount": 99999.0,
+      "currency": "USD",
+      "confidence": 0.85
+    },
+    "confidence": 0.85
+  },
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [
+    "applicant.name.confidence",
+    "applicant.confidence",
+    "trip_purpose.confidence",
+    "planned_trip.confidence"
+  ],
+  "low_confidence_fields": [
+    "visa_details.confidence",
+    "accommodation_info.confidence",
+    "financial_support.estimated_trip_cost.confidence",
+    "financial_support.confidence"
+  ],
+  "missing_fields": []
+}
