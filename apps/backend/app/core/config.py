@@ -66,6 +66,21 @@ class Settings(BaseSettings):
     stripe_publishable_key: Optional[str] = None
     stripe_webhook_secret: Optional[str] = None  # For webhook signature verification
     
+    # Voice Configuration (ElevenLabs + Whisper)
+    elevenlabs_api_key: Optional[str] = None
+    elevenlabs_voice_id: str = Field(
+        default="EXAVITQu4vr4xnSDxMaL",  # Bella voice
+        description="ElevenLabs voice ID for TTS"
+    )
+    elevenlabs_model: str = Field(
+        default="eleven_turbo_v2",
+        description="ElevenLabs TTS model"
+    )
+    
+    # Audio processing limits
+    max_audio_size_mb: int = Field(default=5, description="Max audio file size in MB")
+    audio_timeout_seconds: int = Field(default=10, description="Audio processing timeout")
+    
     # Ancileo MSIG API Configuration
     ancileo_msig_api_key: Optional[str] = None
     ancileo_api_base_url: str = "https://dev.api.ancileo.com"

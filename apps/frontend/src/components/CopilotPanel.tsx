@@ -435,8 +435,6 @@ export function CopilotPanel({ conversationState, sessionId }: CopilotPanelProps
               Continue chatting to get quote
             </Button>
           ) : (
-            <Button className="w-full text-white font-medium rounded-full hover:opacity-90" style={{ backgroundColor: '#dd2930' }}>
-              Proceed to payment
             <Button
               onClick={handleProceedToPayment}
               disabled={isProcessingPayment}

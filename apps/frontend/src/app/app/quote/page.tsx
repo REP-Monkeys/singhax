@@ -640,6 +640,9 @@ export default function QuotePage() {
       }
 
       setMessages(prev => [...prev, assistantMessage])
+      
+      // Store last AI response for voice playback
+      lastAIResponseRef.current = data.message
 
       // Check if the message contains a Stripe checkout URL
       const stripeUrlMatch = data.message.match(/https:\/\/checkout\.stripe\.com\/[^\s]+/)
@@ -699,8 +702,17 @@ export default function QuotePage() {
     }
   }
 
-  const handleVoiceInput = (transcript: string) => {
-    setInputValue(transcript)
+  const lastAIResponseRef = useRef<string>('')
+
+  const handleVoiceInput = async (transcript: string) => {
+    // Voice mode: automatically send the transcript
+    console.log('🎤 Voice input received:', transcript)
+    await handleSendTextMessage(transcript)
+  }
+  
+  const handleGetLastResponse = async (): Promise<string> => {
+    // Return the last AI response for voice playback
+    return lastAIResponseRef.current
   }
 
   return (
@@ -1020,7 +1032,9 @@ export default function QuotePage() {
                       )}
                     </Button>
                     <VoiceButton
+                      sessionId={currentSessionId || ''}
                       onTranscript={handleVoiceInput}
+                      onRequestResponse={handleGetLastResponse}
                       isActive={isVoiceActive}
                       onActiveChange={setIsVoiceActive}
                     />
