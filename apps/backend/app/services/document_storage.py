@@ -193,18 +193,34 @@ class DocumentStorageService:
         json_file_path: Optional[str]
     ) -> Dict[str, Any]:
         """Store flight confirmation data."""
-        flight_data = extracted_json.get("flight_details", {}) or {}
-        destination = extracted_json.get("destination", {}) or {}
-        airline = extracted_json.get("airline", {}) or {}
-        booking_ref = extracted_json.get("booking_reference", {}) or {}
-        trip_value = extracted_json.get("trip_value", {}) or {}
-        trip_duration = extracted_json.get("trip_duration", {}) or {}
+        # Helper function to safely extract dict from potentially list values
+        def safe_get_dict(data: Any, default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            if default is None:
+                default = {}
+            if isinstance(data, list):
+                return data[0] if len(data) > 0 and isinstance(data[0], dict) else default
+            elif isinstance(data, dict):
+                return data
+            else:
+                return default
         
-        departure = flight_data.get("departure", {}) or {}
-        return_flight = flight_data.get("return", {}) or {}
-        flight_numbers = flight_data.get("flight_numbers", {}) or {}
+        # Debug: Log the structure of extracted_json to help diagnose issues
+        airline_raw = extracted_json.get("airline", {})
+        if isinstance(airline_raw, list):
+            print(f"⚠️  Warning: airline field is a list: {airline_raw}")
         
-        total_cost = trip_value.get("total_cost", {}) or {}
+        flight_data = safe_get_dict(extracted_json.get("flight_details", {}), {})
+        destination = safe_get_dict(extracted_json.get("destination", {}), {})
+        airline = safe_get_dict(airline_raw, {})
+        booking_ref = safe_get_dict(extracted_json.get("booking_reference", {}), {})
+        trip_value = safe_get_dict(extracted_json.get("trip_value", {}), {})
+        trip_duration = safe_get_dict(extracted_json.get("trip_duration", {}), {})
+        
+        departure = safe_get_dict(flight_data.get("departure", {}), {})
+        return_flight = safe_get_dict(flight_data.get("return", {}), {})
+        flight_numbers = safe_get_dict(flight_data.get("flight_numbers", {}), {})
+        
+        total_cost = safe_get_dict(trip_value.get("total_cost", {}), {})
         
         flight = Flight(
             user_id=user_id,

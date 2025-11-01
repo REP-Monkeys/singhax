@@ -439,11 +439,24 @@ Only include fields where confidence >= 0.80. For fields below 0.80, set them to
             import re
             
             # Try to extract JSON from response (in case LLM adds extra text)
+            # First try to find a JSON object (starts with {)
             json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
             if json_match:
                 result_text = json_match.group(0)
             
-            result = json.loads(result_text)
+            parsed_result = json.loads(result_text)
+            
+            # Handle case where LLM returns a list instead of a dict
+            if isinstance(parsed_result, list):
+                print(f"⚠️  LLM returned a list instead of dict, attempting to extract first element")
+                if len(parsed_result) > 0 and isinstance(parsed_result[0], dict):
+                    result = parsed_result[0]
+                else:
+                    raise ValueError("LLM returned a list but first element is not a dict")
+            elif isinstance(parsed_result, dict):
+                result = parsed_result
+            else:
+                raise ValueError(f"LLM returned unexpected type: {type(parsed_result)}")
             
             # Ensure required metadata fields
             result["session_id"] = session_id

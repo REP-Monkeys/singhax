@@ -9,6 +9,7 @@ import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
 import { LogOut, Plus, MapPin, Calendar, Users, Plane } from 'lucide-react'
+import { DocumentList } from '@/components/DocumentList'
 
 interface Trip {
   id: string
@@ -28,13 +29,28 @@ export default function DashboardPage() {
   const { user, logout } = useAuth()
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming')
+  const [activeTab, setActiveTab] = useState<'upcoming' | 'past' | 'documents'>('upcoming')
   const [error, setError] = useState('')
+  const [authToken, setAuthToken] = useState<string | null>(null)
   const [destinationImages, setDestinationImages] = useState<Record<string, string>>({})
   const destinationImagesRef = useRef<Record<string, string>>({})
 
   useEffect(() => {
-    fetchTrips()
+    // Get auth token
+    const getAuthToken = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session) {
+        setAuthToken(session.access_token)
+      }
+    }
+    getAuthToken()
+  }, [])
+
+  useEffect(() => {
+    // Only fetch trips when not on documents tab
+    if (activeTab !== 'documents') {
+      fetchTrips()
+    }
   }, [activeTab])
 
   const sanitizeDestinationName = (destination: string): string => {
@@ -283,21 +299,45 @@ export default function DashboardPage() {
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-black" />
               )}
             </button>
+            <button
+              onClick={() => setActiveTab('documents')}
+              className={`pb-3 px-1 font-medium text-sm transition-colors relative ${
+                activeTab === 'documents'
+                  ? 'text-black'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Documents
+              {activeTab === 'documents' && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-black" />
+              )}
+            </button>
           </div>
 
           {/* Error Message */}
-          {error && (
+          {error && activeTab !== 'documents' && (
             <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg mb-6 text-sm">
               {error}
             </div>
           )}
 
-          {/* Loading State */}
-          {loading ? (
-            <div className="flex items-center justify-center py-16">
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-black"></div>
-            </div>
-          ) : displayTrips.length === 0 ? (
+          {/* Documents Tab Content */}
+          {activeTab === 'documents' ? (
+            authToken ? (
+              <DocumentList authToken={authToken} />
+            ) : (
+              <div className="flex items-center justify-center py-16">
+                <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-black"></div>
+              </div>
+            )
+          ) : (
+            <>
+              {/* Loading State */}
+              {loading ? (
+                <div className="flex items-center justify-center py-16">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-black"></div>
+                </div>
+              ) : displayTrips.length === 0 ? (
             /* Empty State */
             <div className="text-center py-16">
               <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
@@ -404,6 +444,8 @@ export default function DashboardPage() {
                 </Card>
               ))}
             </div>
+          )}
+            </>
           )}
         </main>
       </div>

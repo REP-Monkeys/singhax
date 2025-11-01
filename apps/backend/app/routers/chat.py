@@ -390,6 +390,22 @@ async def upload_image(
             filename=file.filename or "uploaded_file"
         )
         
+        # Safety check: Ensure extracted_json is a dict, not a list
+        if isinstance(extracted_json, list):
+            print(f"⚠️  Warning: extracted_json is a list, attempting to extract first element")
+            if len(extracted_json) > 0 and isinstance(extracted_json[0], dict):
+                extracted_json = extracted_json[0]
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to extract document data: Invalid response format"
+                )
+        elif not isinstance(extracted_json, dict):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to extract document data: Unexpected type {type(extracted_json)}"
+            )
+        
         # Step 3: Check document type and reject if unknown
         document_type = extracted_json.get("document_type")
         if document_type == "unknown":

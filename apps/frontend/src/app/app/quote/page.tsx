@@ -146,12 +146,53 @@ export default function QuotePage() {
 
       // Transform messages from API format to component format
       if (data.messages && data.messages.length > 0) {
-        const transformedMessages = data.messages.map((msg: any, idx: number) => ({
-          id: `${idx}`,
-          role: msg.role,
-          content: msg.content,
-          timestamp: new Date()
-        }))
+        // Check if there's document_data in state that we can attach to messages
+        const documentData = data.state?.document_data || []
+        
+        const transformedMessages = data.messages.map((msg: any, idx: number) => {
+          const message: Message = {
+            id: `${idx}`,
+            role: msg.role,
+            content: msg.content,
+            timestamp: new Date()
+          }
+          
+          // If this is an assistant message, check if it follows a document upload
+          if (msg.role === 'assistant' && documentData.length > 0) {
+            // Check if previous message was a document upload
+            const prevMsg = idx > 0 ? data.messages[idx - 1] : null
+            const isAfterDocumentUpload = prevMsg && 
+              prevMsg.role === 'user' && 
+              (prevMsg.content?.includes('[User uploaded a document') || 
+               prevMsg.content?.toLowerCase().includes('uploaded a document'))
+            
+            // Also check if this message mentions extracted details (e.g., "I've extracted", "extracted information")
+            const mentionsExtraction = msg.content && (
+              msg.content.includes('extracted') ||
+              msg.content.includes('extraction') ||
+              msg.content.includes('I\'ve extracted') ||
+              msg.content.includes('extracted the following')
+            )
+            
+            // Attach extractedData if this message is about document extraction
+            if (isAfterDocumentUpload || mentionsExtraction) {
+              // Find the most recent document that matches
+              // Try to match by checking if message mentions the filename or use latest
+              const latestDoc = documentData[documentData.length - 1]
+              if (latestDoc?.extracted_json) {
+                message.extractedData = latestDoc.extracted_json
+                console.log('🔍 [DEBUG] Attached extractedData to assistant message:', {
+                  messageIndex: idx,
+                  isAfterDocumentUpload,
+                  mentionsExtraction,
+                  extractedData: latestDoc.extracted_json
+                })
+              }
+            }
+          }
+          
+          return message
+        })
         setMessages(transformedMessages)
       }
 
@@ -290,6 +331,12 @@ export default function QuotePage() {
 
       const uploadData = await uploadResponse.json()
 
+      // DEBUG: Log upload response to check extracted data
+      console.log('🔍 [DEBUG] Upload response:', uploadData)
+      console.log('🔍 [DEBUG] ocr_result:', uploadData.ocr_result)
+      console.log('🔍 [DEBUG] extracted_json:', uploadData.ocr_result?.extracted_json)
+      console.log('🔍 [DEBUG] Will set extractedData to:', uploadData.ocr_result?.extracted_json || null)
+
       // Add user message with file attachment (like ChatGPT)
       const userMessage: Message = {
         id: Date.now().toString(),
@@ -307,20 +354,30 @@ export default function QuotePage() {
 
       // Add assistant response with extracted data
       if (uploadData.message) {
+        const extractedDataValue = uploadData.ocr_result?.extracted_json || null
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
           content: uploadData.message,
           timestamp: new Date(),
-          extractedData: uploadData.ocr_result?.extracted_json || null
+          extractedData: extractedDataValue
         }
+        console.log('🔍 [DEBUG] Created assistant message with extractedData:', extractedDataValue)
+        console.log('🔍 [DEBUG] Full assistant message:', assistantMessage)
         setMessages(prev => [...prev, assistantMessage])
+        
+        // Update conversation state from upload response if available
+        // But DON'T reload history as it will overwrite extractedData
+        if (uploadData.state) {
+          setConversationState(uploadData.state)
+        }
+      } else {
+        console.warn('⚠️ [DEBUG] uploadData.message is missing, not creating assistant message')
       }
 
-      // Reload chat history to get updated state
-      if (sessionId) {
-        await loadChatHistory(sessionId)
-      }
+      // NOTE: We don't reload chat history here because it would overwrite the extractedData
+      // The uploaded message with extractedData is already added above
+      // If you need to sync state, update conversationState directly instead
 
     } catch (error: any) {
       console.error('File upload error:', error)
@@ -598,7 +655,10 @@ export default function QuotePage() {
                         </div>
                       </div>
                       {/* Show extracted data card for assistant messages with extracted data */}
-                      {message.role === 'assistant' && message.extractedData && (
+                      {message.role === 'assistant' && (() => {
+                        console.log('🔍 [DEBUG] Rendering check - message.extractedData:', message.extractedData)
+                        return message.extractedData
+                      })() && (
                         <div className="mt-2">
                           <ExtractedDataCard
                             extractedData={message.extractedData}
