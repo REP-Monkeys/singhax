@@ -1674,91 +1674,141 @@ Is this information correct? (yes/no)"""
     
     def policy_explainer(state: ConversationState) -> ConversationState:
         """
-        Answer policy questions using mock policy knowledge base.
+        Answer policy questions with context-aware responses using RAG and user context.
+        
+        This node:
+        1. Retrieves user's policy/tier context from database
+        2. Searches policy documents using RAG
+        3. Generates personalized response using Groq LLM
+        4. Includes specific coverage amounts for user's tier
         """
         
-        print("\n📚 POLICY EXPLAINER NODE")
+        print("\n📚 POLICY EXPLAINER NODE (Context-Aware)")
         
         messages = state.get("messages", [])
         last_message = messages[-1]
         user_question = last_message.content if hasattr(last_message, 'content') else str(last_message)
+        user_id = state.get("user_id")
         
         print(f"   Question: {user_question[:100]}...")
         
-        # Mock policy knowledge base (replace with real RAG later)
-        policy_kb = {
-            "medical": {
-                "coverage": "Medical coverage includes emergency medical treatment, hospitalization, and medical evacuation up to policy limits.",
-                "limits": "Standard: $50,000 | Elite: $100,000 | Premier: $200,000",
-                "exclusions": "Pre-existing conditions (unless declared), cosmetic procedures, routine checkups"
-            },
-            "cancellation": {
-                "coverage": "Trip cancellation covers non-refundable expenses if you must cancel due to covered reasons.",
-                "reasons": "Serious illness, injury, death of traveler/family, natural disasters, travel warnings",
-                "limits": "Standard: $5,000 | Elite: $10,000 | Premier: $15,000"
-            },
-            "baggage": {
-                "coverage": "Baggage coverage includes loss, theft, or damage to personal belongings.",
-                "limits": "Standard: $3,000 | Elite: $5,000 | Premier: $10,000",
-                "exclusions": "Cash, jewelry over $500, electronics over $1,000 (unless declared)"
-            },
-            "adventure": {
-                "coverage": "Adventure sports coverage available in Elite and Premier plans.",
-                "included": "Skiing, scuba diving (certified), hiking, zip-lining",
-                "excluded": "Base jumping, solo climbing, motor sports",
-                "requirement": "Must select Elite or Premier plan and declare activities"
-            },
-            "pre-existing": {
-                "coverage": "Pre-existing conditions can be covered if declared and accepted.",
-                "process": "Declare conditions during application, underwriting review, additional premium may apply",
-                "exclusions": "Conditions not declared, terminal illnesses, ongoing treatment required"
-            }
-        }
+        # Get user's policy/tier context
+        from app.agents.tools import get_user_policy_context
+        user_context = get_user_policy_context(user_id, db)
         
-        # Simple keyword matching to find relevant policy section
-        question_lower = user_question.lower()
+        print(f"   User context: has_policy={user_context.get('has_policy')}, tier={user_context.get('tier')}")
         
-        relevant_sections = []
+        # Search policy documents using RAG
+        from app.services.rag import RAGService
+        rag_service = RAGService(db=db)
         
-        if any(word in question_lower for word in ["medical", "hospital", "doctor", "treatment", "sick", "injured"]):
-            relevant_sections.append(("Medical Coverage", policy_kb["medical"]))
+        try:
+            # Search with tier filter if user has selected a tier
+            search_results = rag_service.search(
+                query=user_question,
+                limit=3,
+                tier=user_context.get("tier") if user_context.get("tier") else None
+            )
+            print(f"   Found {len(search_results)} relevant policy sections")
+        except Exception as e:
+            print(f"   ⚠️  RAG search failed: {e}")
+            search_results = []
         
-        if any(word in question_lower for word in ["cancel", "cancellation", "refund", "can't go"]):
-            relevant_sections.append(("Trip Cancellation", policy_kb["cancellation"]))
+        # Format context for LLM
+        if user_context.get("has_policy"):
+            # User has purchased policy - be specific about their coverage
+            tier_display = user_context['tier'].title() if user_context.get('tier') else "Unknown"
+            context_prompt = f"""User has an ACTIVE policy:
+- Tier: {tier_display}
+- Policy Number: {user_context['policy_number']}
+- Coverage Period: {user_context['effective_date']} to {user_context['expiry_date']}
+- Destination: {user_context['destination']}
+- Travelers: {len(user_context.get('travelers', []))} person(s)
+- Medical Coverage: ${user_context['coverage'].get('medical_coverage', 'N/A'):,}
+- Trip Cancellation: ${user_context['coverage'].get('trip_cancellation', 'N/A'):,}
+- Baggage Protection: ${user_context['coverage'].get('baggage_loss', 'N/A'):,}
+- Adventure Sports: {'Yes' if user_context['coverage'].get('adventure_sports') else 'No'}
+
+Answer their question SPECIFICALLY about THEIR {tier_display} policy."""
         
-        if any(word in question_lower for word in ["bag", "luggage", "lost", "stolen", "damage"]):
-            relevant_sections.append(("Baggage Coverage", policy_kb["baggage"]))
+        elif user_context.get("tier"):
+            # User has selected a tier but not purchased yet
+            tier_display = user_context['tier'].title()
+            context_prompt = f"""User is considering the {tier_display} plan.
+Provide information about this tier and compare with other tiers if relevant."""
         
-        if any(word in question_lower for word in ["adventure", "sport", "ski", "dive", "scuba", "hiking"]):
-            relevant_sections.append(("Adventure Sports", policy_kb["adventure"]))
-        
-        if any(word in question_lower for word in ["pre-existing", "condition", "medical history"]):
-            relevant_sections.append(("Pre-existing Conditions", policy_kb["pre-existing"]))
-        
-        # Build response
-        if relevant_sections:
-            response = "Based on our policy:\n\n"
-            for section_name, section_data in relevant_sections:
-                response += f"**{section_name}:**\n"
-                for key, value in section_data.items():
-                    response += f"• {key.title()}: {value}\n"
-                response += "\n"
-            response += "Do you have any other questions about coverage?"
         else:
-            response = """I can help explain our travel insurance policy. Here are common topics:
-
-- **Medical Coverage** - Emergency treatment and hospitalization
-- **Trip Cancellation** - Non-refundable expenses if you must cancel
-- **Baggage** - Lost, stolen, or damaged belongings
-- **Adventure Sports** - Coverage for activities (Elite/Premier plans)
-- **Pre-existing Conditions** - How we handle medical history
-
-What would you like to know more about?"""
+            # User hasn't selected a tier yet - provide general comparison
+            context_prompt = """User hasn't selected a tier yet. Provide general policy information and highlight differences between Standard, Elite, and Premier tiers."""
         
-        state["messages"].append(AIMessage(content=response))
+        # Format RAG results
+        rag_context = ""
+        if search_results:
+            rag_context = "\n\nRelevant Policy Sections:\n\n"
+            for i, result in enumerate(search_results, 1):
+                pages_str = ', '.join(map(str, result.get('pages', [])))
+                rag_context += f"""[{i}] {result['section_id']}: {result['heading']}
+(From {result['title']}, Page {pages_str}, Similarity: {result['similarity']:.2f})
+
+{result['text'][:500]}...
+
+---
+
+"""
+        
+        # Generate response using Groq LLM
+        from app.agents.llm_client import get_llm
+        llm = get_llm()
+        
+        system_prompt = f"""You are a helpful travel insurance policy expert. 
+
+{context_prompt}
+
+{rag_context}
+
+Guidelines:
+1. Be specific and direct - cite exact coverage amounts
+2. Use the policy sections provided above for accurate information
+3. If user has a policy, personalize the answer to THEIR coverage
+4. Use bullet points for clarity
+5. Include citations like "[Section 6: Medical Coverage]"
+6. If asked about exclusions, be clear about what's NOT covered
+7. If information isn't in the provided sections, say so clearly
+
+Format your response with:
+- Clear answer to their question
+- Specific coverage amounts (if applicable)
+- Relevant exclusions or conditions
+- Citation to policy sections"""
+
+        try:
+            response_obj = llm.invoke([
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_question}
+            ])
+            
+            response_text = response_obj.content
+            
+            # Add helpful footer if user has policy
+            if user_context.get("has_policy"):
+                response_text += f"\n\n---\n📋 Your Policy: {user_context['policy_number']}\n📅 Valid: {user_context['effective_date']} to {user_context['expiry_date']}"
+            
+        except Exception as e:
+            print(f"   ⚠️  LLM generation failed: {e}")
+            # Fallback response
+            if search_results:
+                response_text = "Based on the policy documents:\n\n"
+                for result in search_results[:2]:
+                    response_text += f"**{result['heading']}** (Section {result['section_id']})\n{result['text'][:300]}...\n\n"
+            else:
+                response_text = "I couldn't find specific information in our policy documents. Please contact customer service for detailed assistance."
+        
+        # Update state
+        messages.append(AIMessage(content=response_text))
+        state["messages"] = messages
         state["policy_question"] = user_question
         
-        print(f"   ✅ Answered with {len(relevant_sections)} relevant sections")
+        print(f"   ✅ Generated {len(response_text)} character response")
         
         return state
     
