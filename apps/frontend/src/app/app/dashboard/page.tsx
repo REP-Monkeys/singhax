@@ -53,6 +53,19 @@ export default function DashboardPage() {
     }
   }, [activeTab])
 
+  useEffect(() => {
+    // Auto-refresh trips when window gains focus (user returns from payment)
+    const handleFocus = () => {
+      console.log('👁️ Window gained focus - refreshing trips...')
+      if (activeTab !== 'documents') {
+        fetchTrips()
+      }
+    }
+
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [activeTab])
+
   const sanitizeDestinationName = (destination: string): string => {
     return destination
       .toLowerCase()

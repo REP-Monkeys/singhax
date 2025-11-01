@@ -1471,9 +1471,17 @@ def create_conversation_graph(db) -> StateGraph:
                     traceback.print_exc()
 
             # Format response with plan cards - frontend parses this format to render side-by-side cards
+            # NOTE: Pricing service now ensures ALL three tiers (standard, elite, premier) are always present
             quotes = quote_result["quotes"]
             dest_name = destination.title()
             
+            # DEBUG: Log all tiers to verify they're present
+            logger.info(f"🔍 DEBUG: Number of tiers in quotes: {len(quotes)}")
+            logger.info(f"🔍 DEBUG: Available tiers: {list(quotes.keys())}")
+            for tier_name, tier_data in quotes.items():
+                logger.info(f"🔍 DEBUG: {tier_name} - ${tier_data.get('price')} SGD")
+            
+            # Always show all three payment plans regardless of recommendation
             response_parts = [f"Great! Here are your travel insurance options for {dest_name}:\n"]
             
             if "standard" in quotes:
@@ -1525,6 +1533,14 @@ def create_conversation_graph(db) -> StateGraph:
                         response_parts.append(f"\nBased on historical data, we recommend the {recommended.title()} plan for optimal coverage.")
             
             response = "\n".join(response_parts)
+            
+            # DEBUG: Log final response
+            logger.info(f"🔍 DEBUG: Final response ({len(response)} chars)")
+            logger.info(f"🔍 DEBUG: Contains 'Standard': {'Standard' in response}")
+            logger.info(f"🔍 DEBUG: Contains 'Elite': {'Elite' in response}")
+            logger.info(f"🔍 DEBUG: Contains 'Premier': {'Premier' in response}")
+            logger.info(f"🔍 DEBUG: Response preview:\n{response[:800]}")
+            
             state["messages"].append(AIMessage(content=response))
             
             # CRITICAL: Mark pricing as complete to prevent re-entry

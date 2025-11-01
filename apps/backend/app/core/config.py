@@ -90,8 +90,8 @@ class Settings(BaseSettings):
     ancileo_api_base_url: str = "https://dev.api.ancileo.com"
     
     # Payment Configuration
-    payment_success_url: str = "http://localhost:8085/success?session_id={CHECKOUT_SESSION_ID}"
-    payment_cancel_url: str = "http://localhost:8085/cancel"
+    payment_success_url: str = "http://localhost:3000/app/dashboard?payment=success&session_id={CHECKOUT_SESSION_ID}"
+    payment_cancel_url: str = "http://localhost:3000/app/dashboard?payment=canceled"
     
     # Email Configuration
     smtp_host: Optional[str] = None

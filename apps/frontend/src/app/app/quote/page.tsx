@@ -209,16 +209,22 @@ export default function QuotePage() {
       emoji: string
     }> = []
 
-    // Match plan patterns like "🌟 **Standard Plan: $123.45 SGD**" or "⭐ **Elite Plan: $456.78 SGD**"
-    // Updated pattern to capture better
-    const planPattern = /([🌟⭐👑])\s?\*\*([^:]+):\s*\$\s*([0-9,]+\.?\d*)\s*SGD\*\*([\s\S]*?)(?=\n\n[🌟⭐👑]\s?\*\*|\n\n[A-Z💡📊]|\n\nAll prices|$)/g
+    // Match plan patterns - more flexible pattern to catch emojis
+    const planPattern = /([\u{1F300}-\u{1F9FF}])\s?\*\*([^:]+):\s*\$\s*([0-9,]+\.?\d*)\s*SGD\*\*([\s\S]*?)(?=\n\n[\u{1F300}-\u{1F9FF}]\s?\*\*|\n\n[A-Z💡📊]|\n\nAll prices|$)/gu
     
     let match
     while ((match = planPattern.exec(content)) !== null) {
-      const emoji = match[1]
+      let emoji = match[1]
       const name = match[2].trim()
       const price = `$${match[3]} SGD`
       const featuresText = match[4] || ''
+      
+      // Fallback emoji mapping if extraction fails
+      if (!emoji || emoji === '◆') {
+        if (name.toLowerCase().includes('standard')) emoji = '🌟'
+        else if (name.toLowerCase().includes('elite')) emoji = '⭐'
+        else if (name.toLowerCase().includes('premier')) emoji = '👑'
+      }
       
       // Extract features (lines starting with ✓ or *)
       const features = featuresText
@@ -245,7 +251,7 @@ export default function QuotePage() {
     }
 
     // Find where plans section starts and ends
-    const firstPlanIndex = content.search(/[🌟⭐👑]\s?\*\*/)
+    const firstPlanIndex = content.search(/[\u{1F300}-\u{1F9FF}]\s?\*\*/u)
     const outroStartIndex = content.indexOf('\n\nAll prices')
     
     const intro = firstPlanIndex > 0 ? content.substring(0, firstPlanIndex).trim() : ''
@@ -843,9 +849,18 @@ export default function QuotePage() {
                                     {plans.map((plan, index) => (
                                       <Card key={index} className="border border-gray-200 hover:border-gray-300 transition-colors">
                                         <CardHeader className="pb-3">
-                                          <CardTitle className="text-lg flex items-center gap-2">
-                                            <span className="text-xl">{plan.emoji}</span>
-                                            <span className="break-words">{plan.name}</span>
+                                          <CardTitle className="text-base flex items-start gap-2 min-h-[3rem]">
+                                            <span className="text-2xl flex-shrink-0" style={{ fontFamily: '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif' }}>
+                                              {plan.emoji}
+                                            </span>
+                                            <span className="break-words font-semibold leading-tight text-sm">
+                                              {plan.name.replace('(Recommended for adventure sports)', '').trim()}
+                                              {plan.name.includes('Recommended') && (
+                                                <span className="block text-xs text-gray-500 font-normal mt-0.5">
+                                                  Recommended for adventure sports
+                                                </span>
+                                              )}
+                                            </span>
                                           </CardTitle>
                                           <CardDescription className="text-xl font-bold text-black mt-2">
                                             {plan.price}
