@@ -88,6 +88,41 @@ def get_or_create_checkpointer():
         return None
 
 
+def clean_markdown(text: str) -> str:
+    """Remove markdown formatting from text while preserving content.
+    
+    Args:
+        text: Text with markdown formatting
+        
+    Returns:
+        Plain text without markdown syntax
+    """
+    if not text:
+        return text
+    
+    # Remove bold (**text** or __text__)
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    
+    # Remove italic (*text* or _text_)
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'_(.+?)_', r'\1', text)
+    
+    # Remove strikethrough (~~text~~)
+    text = re.sub(r'~~(.+?)~~', r'\1', text)
+    
+    # Remove inline code (`code`)
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    
+    # Remove headers (# Header)
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    
+    # Remove links [text](url) -> text
+    text = re.sub(r'\[(.+?)\]\(.+?\)', r'\1', text)
+    
+    return text
+
+
 def parse_date_safe(date_string: str, prefer_future: bool = True, reference_date: Optional[date] = None) -> Optional[date]:
     """Safely parse date string to date object with flexible format support.
     
