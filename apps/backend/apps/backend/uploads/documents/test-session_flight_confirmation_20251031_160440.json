@@ -1,0 +1,21 @@
+{
+  "session_id": "test-session",
+  "document_type": "flight_confirmation",
+  "extracted_at": "2025-10-31T16:04:40.341588Z",
+  "source_filename": "unknown.pdf",
+  "airline": null,
+  "flight_details": null,
+  "destination": null,
+  "travelers": null,
+  "trip_duration": null,
+  "trip_value": null,
+  "booking_reference": null,
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [],
+  "low_confidence_fields": [],
+  "missing_fields": []
+}

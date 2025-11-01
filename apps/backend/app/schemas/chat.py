@@ -125,3 +125,28 @@ class ChatSessionState(BaseModel):
                 ]
             }
         }
+
+
+class ImageUploadResponse(BaseModel):
+    """Response schema for image upload with OCR."""
+    session_id: str
+    image_id: str
+    filename: str
+    ocr_result: Dict[str, Any]
+    message: Optional[str] = None  # Suggested message to send with extracted text
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                "image_id": "img_123456",
+                "filename": "booking_confirmation.pdf",
+                "ocr_result": {
+                    "text": "Extracted text from document...",
+                    "confidence": 85.5,
+                    "word_count": 150,
+                    "file_type": "pdf"
+                },
+                "message": "I've uploaded a booking confirmation. Extracted text: ..."
+            }
+        }

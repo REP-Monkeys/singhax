@@ -40,19 +40,28 @@ async def create_trip(
 
 @router.get("/", response_model=List[TripResponse])
 async def get_trips(
-    status: str = None,  # Filter by status: draft, ongoing, completed, past
+    status: str = None,  # Filter by status: draft, ongoing, completed, past (comma-separated)
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get user's trips, optionally filtered by status."""
+    """Get user's trips, optionally filtered by status.
+
+    Args:
+        status: Comma-separated list of statuses (e.g., "draft,ongoing,completed")
+    """
 
     query = db.query(Trip).filter(Trip.user_id == current_user.id)
 
     if status:
-        query = query.filter(Trip.status == status)
+        # Handle comma-separated status values
+        status_list = [s.strip() for s in status.split(',')]
+        query = query.filter(Trip.status.in_(status_list))
 
     # Order by created_at desc (newest first)
     trips = query.order_by(Trip.created_at.desc()).all()
+
+    print(f"📋 Fetched {len(trips)} trips for user {current_user.id} (status filter: {status})")
+
     return trips
 
 

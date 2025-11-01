@@ -245,6 +245,255 @@ class TestChatRouter:
             "message": "Test"
         })
         assert response.status_code == 422
+    
+    @patch('app.routers.chat.OCRService')
+    @patch('app.routers.chat.JSONExtractor')
+    @patch('app.routers.chat.get_conversation_graph')
+    @patch('app.routers.chat.get_current_user_supabase')
+    @patch('app.routers.chat.get_db')
+    def test_upload_image_success(
+        self, 
+        mock_get_db, 
+        mock_get_user, 
+        mock_get_graph,
+        mock_json_extractor_class,
+        mock_ocr_service_class,
+        client, 
+        valid_session_id
+    ):
+        """Test successful image upload with OCR."""
+        # Mock authentication
+        mock_user = Mock()
+        mock_user.id = "user123"
+        mock_get_user.return_value = mock_user
+        mock_get_db.return_value = Mock()
+        
+        # Mock OCR service
+        mock_ocr_service = Mock()
+        mock_ocr_service.extract_text.return_value = {
+            "text": "Flight TR892 from SIN to NRT on March 15, 2025",
+            "confidence": 91.5,
+            "word_count": 10,
+            "file_type": "image",
+            "error": None
+        }
+        mock_ocr_service_class.return_value = mock_ocr_service
+        
+        # Mock JSON extractor
+        mock_json_extractor = Mock()
+        mock_json_extractor.extract.return_value = {
+            "document_type": "flight_confirmation",
+            "session_id": valid_session_id,
+            "source_filename": "flight.png",
+            "high_confidence_fields": ["airline", "destination"],
+            "low_confidence_fields": [],
+            "json_file_path": "/path/to/json"
+        }
+        mock_json_extractor_class.return_value = mock_json_extractor
+        
+        # Mock graph
+        mock_graph = Mock()
+        mock_graph.get_state.return_value = Mock(values={"messages": []})
+        mock_graph.invoke.return_value = {
+            "messages": [
+                AIMessage(content="I've processed your flight confirmation")
+            ]
+        }
+        mock_get_graph.return_value = mock_graph
+        
+        # Create test file
+        files = {
+            "file": ("flight.png", b"fake image data", "image/png")
+        }
+        data = {
+            "session_id": valid_session_id
+        }
+        
+        response = client.post(
+            "/api/v1/chat/upload-image",
+            files=files,
+            data=data
+        )
+        
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["session_id"] == valid_session_id
+        assert "image_id" in response_data
+        assert "ocr_result" in response_data
+        assert response_data["ocr_result"]["document_type"] == "flight_confirmation"
+        assert "message" in response_data
+    
+    @patch('app.routers.chat.get_current_user_supabase')
+    def test_upload_image_invalid_session_id(self, mock_get_user, client):
+        """Test image upload with invalid session ID."""
+        mock_user = Mock()
+        mock_get_user.return_value = mock_user
+        
+        files = {
+            "file": ("test.png", b"fake data", "image/png")
+        }
+        data = {
+            "session_id": "invalid-session-id"
+        }
+        
+        response = client.post(
+            "/api/v1/chat/upload-image",
+            files=files,
+            data=data
+        )
+        
+        assert response.status_code == 400
+        assert "Invalid session_id format" in response.json()["detail"]
+    
+    @patch('app.routers.chat.get_current_user_supabase')
+    def test_upload_image_unsupported_format(self, mock_get_user, client, valid_session_id):
+        """Test image upload with unsupported file format."""
+        mock_user = Mock()
+        mock_get_user.return_value = mock_user
+        
+        files = {
+            "file": ("test.txt", b"fake data", "text/plain")
+        }
+        data = {
+            "session_id": valid_session_id
+        }
+        
+        response = client.post(
+            "/api/v1/chat/upload-image",
+            files=files,
+            data=data
+        )
+        
+        assert response.status_code == 400
+        assert "Unsupported file type" in response.json()["detail"]
+    
+    @patch('app.routers.chat.get_current_user_supabase')
+    def test_upload_image_file_too_large(self, mock_get_user, client, valid_session_id):
+        """Test image upload with file exceeding size limit."""
+        mock_user = Mock()
+        mock_get_user.return_value = mock_user
+        
+        # Create file larger than 10MB
+        large_file_data = b"x" * (11 * 1024 * 1024)  # 11MB
+        
+        files = {
+            "file": ("large.png", large_file_data, "image/png")
+        }
+        data = {
+            "session_id": valid_session_id
+        }
+        
+        response = client.post(
+            "/api/v1/chat/upload-image",
+            files=files,
+            data=data
+        )
+        
+        assert response.status_code == 400
+        assert "File too large" in response.json()["detail"]
+    
+    @patch('app.routers.chat.OCRService')
+    @patch('app.routers.chat.get_current_user_supabase')
+    @patch('app.routers.chat.get_db')
+    def test_upload_image_ocr_error(
+        self, 
+        mock_get_db, 
+        mock_get_user, 
+        mock_ocr_service_class,
+        client, 
+        valid_session_id
+    ):
+        """Test image upload when OCR processing fails."""
+        mock_user = Mock()
+        mock_get_user.return_value = mock_user
+        mock_get_db.return_value = Mock()
+        
+        # Mock OCR service to return error
+        mock_ocr_service = Mock()
+        mock_ocr_service.extract_text.return_value = {
+            "text": "",
+            "confidence": 0.0,
+            "word_count": 0,
+            "file_type": "image",
+            "error": "OCR processing failed"
+        }
+        mock_ocr_service_class.return_value = mock_ocr_service
+        
+        files = {
+            "file": ("test.png", b"fake image data", "image/png")
+        }
+        data = {
+            "session_id": valid_session_id
+        }
+        
+        response = client.post(
+            "/api/v1/chat/upload-image",
+            files=files,
+            data=data
+        )
+        
+        assert response.status_code == 500
+        assert "OCR processing failed" in response.json()["detail"]
+    
+    @patch('app.routers.chat.OCRService')
+    @patch('app.routers.chat.JSONExtractor')
+    @patch('app.routers.chat.get_current_user_supabase')
+    @patch('app.routers.chat.get_db')
+    def test_upload_pdf_success(
+        self, 
+        mock_get_db, 
+        mock_get_user, 
+        mock_json_extractor_class,
+        mock_ocr_service_class,
+        client, 
+        valid_session_id
+    ):
+        """Test successful PDF upload with OCR."""
+        mock_user = Mock()
+        mock_get_user.return_value = mock_user
+        mock_get_db.return_value = Mock()
+        
+        # Mock OCR service for PDF
+        mock_ocr_service = Mock()
+        mock_ocr_service.extract_text.return_value = {
+            "text": "Hotel Booking: Grand Tokyo Hotel. Check-in: March 15, 2025",
+            "confidence": 89.2,
+            "word_count": 8,
+            "file_type": "pdf",
+            "pages": 1,
+            "error": None
+        }
+        mock_ocr_service_class.return_value = mock_ocr_service
+        
+        # Mock JSON extractor
+        mock_json_extractor = Mock()
+        mock_json_extractor.extract.return_value = {
+            "document_type": "hotel_booking",
+            "session_id": valid_session_id,
+            "source_filename": "hotel.pdf",
+            "high_confidence_fields": ["hotel_details", "booking_dates"],
+            "low_confidence_fields": [],
+            "json_file_path": "/path/to/json"
+        }
+        mock_json_extractor_class.return_value = mock_json_extractor
+        
+        files = {
+            "file": ("hotel.pdf", b"fake pdf data", "application/pdf")
+        }
+        data = {
+            "session_id": valid_session_id
+        }
+        
+        response = client.post(
+            "/api/v1/chat/upload-image",
+            files=files,
+            data=data
+        )
+        
+        assert response.status_code == 200
+        response_data = response.json()
+        assert response_data["ocr_result"]["document_type"] == "hotel_booking"
+        assert response_data["ocr_result"]["file_type"] == "pdf"
 
 
 

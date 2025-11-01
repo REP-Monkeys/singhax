@@ -32,3 +32,5 @@ Thumbs.db
 
 # Reference repository (clone from https://github.com/SingHacks-2025/ancileo-msig)
 ancileo-msig-reference/
+# Hackathon resources (cloned from ancileo-msig repo)
+hackathon-resources/

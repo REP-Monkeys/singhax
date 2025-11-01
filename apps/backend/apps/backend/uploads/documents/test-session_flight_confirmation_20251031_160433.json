@@ -1,0 +1,25 @@
+{
+  "session_id": "test-session",
+  "document_type": "flight_confirmation",
+  "airline": {
+    "name": "Scoot",
+    "confidence": 0.92
+  },
+  "destination": {
+    "country": "Japan",
+    "confidence": 0.92
+  },
+  "extracted_at": "2025-10-31T16:04:33.819977Z",
+  "source_filename": "flight.png",
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [
+    "airline.confidence",
+    "destination.confidence"
+  ],
+  "low_confidence_fields": [],
+  "missing_fields": []
+}
