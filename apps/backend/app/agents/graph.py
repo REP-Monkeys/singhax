@@ -179,13 +179,23 @@ def create_conversation_graph(db) -> StateGraph:
     def orchestrator(state: ConversationState) -> ConversationState:
         """Route conversation based on LLM intent classification."""
         
-        # Initialize loop protection
+        # Initialize essential state fields if missing
         if "_loop_count" not in state:
             state["_loop_count"] = 0
         if "_ready_for_pricing" not in state:
             state["_ready_for_pricing"] = False
         if "_pricing_complete" not in state:
             state["_pricing_complete"] = False
+        if "trip_details" not in state:
+            state["trip_details"] = {}
+        if "travelers_data" not in state:
+            state["travelers_data"] = {}
+        if "preferences" not in state:
+            state["preferences"] = {}
+        if "collected_slots" not in state:
+            state["collected_slots"] = {}
+        if "quote_data" not in state:
+            state["quote_data"] = {}
         
         state["_loop_count"] += 1
         print(f"\n{'='*60}")

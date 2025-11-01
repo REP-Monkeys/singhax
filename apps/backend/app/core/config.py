@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     stripe_publishable_key: Optional[str] = None
     stripe_webhook_secret: Optional[str] = None  # For webhook signature verification
     
+    # Ancileo MSIG API Configuration
+    ancileo_msig_api_key: Optional[str] = None
+    ancileo_api_base_url: str = "https://dev.api.ancileo.com"
+    
     # Payment Configuration
     payment_success_url: str = "http://localhost:8085/success?session_id={CHECKOUT_SESSION_ID}"
     payment_cancel_url: str = "http://localhost:8085/cancel"

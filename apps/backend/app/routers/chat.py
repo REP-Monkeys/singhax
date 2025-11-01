@@ -105,32 +105,13 @@ async def send_message(
         print(f"\n💬 Processing message for session {request.session_id[:8]}...")
         print(f"   User message: '{request.message[:80]}...'")
 
-        # Load existing state from checkpointer to preserve conversation context
-        try:
-            existing_state = graph.get_state(config)
-        except Exception as e:
-            print(f"   ⚠️  Could not load existing state: {e}")
-            existing_state = None
-
-        if existing_state and existing_state.values and existing_state.values.get("messages"):
-            # Continuing existing conversation - append new message to existing state
-            print(f"   📂 Loaded existing state with {len(existing_state.values.get('messages', []))} messages")
-            # Get the messages list and append new message
-            existing_messages = list(existing_state.values.get("messages", []))
-            existing_messages.append(HumanMessage(content=request.message))
-
-            # Create input with updated messages
-            current_state = {"messages": existing_messages}
-        else:
-            # New conversation - initialize state
-            print(f"   🆕 Starting new conversation")
-            current_state = {
-                "messages": [HumanMessage(content=request.message)],
-                "user_id": str(current_user.id),
-                "session_id": request.session_id,
-            }
-
-        # Invoke graph with messages - graph will handle merging with checkpoint state
+        # LangGraph's checkpointer handles state loading automatically
+        # Just pass the new message and essential metadata
+        current_state = {
+            "messages": [HumanMessage(content=request.message)],
+            "user_id": str(current_user.id),
+            "session_id": request.session_id,
+        }
         # Run in thread pool executor to prevent blocking the async event loop
         result = await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(

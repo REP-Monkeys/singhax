@@ -110,6 +110,8 @@ DATABASE_URL=postgresql://postgres:password@localhost:5432/convo_travel_insure
 # External APIs
 GROQ_API_KEY=your-groq-api-key
 STRIPE_SECRET_KEY=your-stripe-secret-key
+ANCILEO_MSIG_API_KEY=your-ancileo-api-key
+ANCILEO_API_BASE_URL=https://dev.api.ancileo.com
 
 # Security
 SECRET_KEY=your-secret-key-change-in-production
@@ -123,6 +125,7 @@ For cloud database hosting, see our [Supabase Setup Guide](docs/QUICK_START_SUPA
 
 1. **Groq API Key:** Get from https://console.groq.com/
 2. **Stripe Keys:** Get from https://dashboard.stripe.com/
+3. **Ancileo MSIG API Key:** Contact Ancileo for hackathon API access
 
 ## 📚 API Documentation
 
@@ -239,21 +242,49 @@ alembic downgrade -1
 
 ### Current Features
 
-- ✅ Conversational quote flow
-- ✅ Price range and firm pricing
-- ✅ Policy document search (RAG)
-- ✅ Claims guidance wizard
-- ✅ Voice input support
-- ✅ Human handoff system
-- ✅ Multi-traveler support
+- ✅ **Real Ancileo MSIG API Integration**
+  - Live insurance quotations via Ancileo API
+  - 3-tier pricing (Standard/Elite/Premier)
+  - Automatic policy issuance after payment
+  - Fresh quotes to avoid expiration
+- ✅ **Conversational quote flow**
+  - AI-powered multi-turn dialogue
+  - Natural language processing with Groq LLM
+  - Flexible date parsing
+- ✅ **Payment Processing**
+  - Stripe checkout integration
+  - Webhook-based confirmation
+  - Automatic policy creation
+- ✅ **Price range and firm pricing**
+- ✅ **Policy document search (RAG)**
+- ✅ **Claims guidance wizard**
+- ✅ **Claims intelligence**
+  - 72K+ historical claims analysis
+  - Data-driven risk assessment
+- ✅ **Voice input support**
+- ✅ **Human handoff system**
+- ✅ **Multi-traveler support**
+
+### Pricing Strategy
+
+The system uses a **3-tier pricing model** integrated with Ancileo MSIG API:
+
+1. **Elite Tier (Baseline)**: Price directly from Ancileo API
+2. **Standard Tier**: Elite price ÷ 1.8 (~56% of Elite)
+3. **Premier Tier**: Elite price × 1.39 (~139% of Elite)
+
+This ensures:
+- Real market pricing from Ancileo
+- Competitive Standard tier for budget travelers
+- Premium tier for maximum coverage
 
 ### TODO Features
 
-- 🔄 Real LLM integration
-- 🔄 Production authentication
-- 🔄 Payment processing
-- 🔄 Real-time chat
+- 🔄 Traveler details collection in conversation flow
+- 🔄 Vector-based RAG search (pgvector)
+- 🔄 Real-time chat (WebSockets)
 - 🔄 Mobile app
+- 🔄 Voice input (speech-to-text)
 
 ## 🤝 Contributing
 

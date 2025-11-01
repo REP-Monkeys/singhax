@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from app.core.config import settings
 from app.adapters.insurer.base import InsurerAdapter
 from app.adapters.insurer.mock import MockInsurerAdapter
+from app.adapters.insurer.ancileo_adapter import AncileoAdapter
 from app.services.geo_mapping import GeoMapper, DestinationArea
 
 
@@ -51,8 +52,8 @@ class PricingService:
     """Service for calculating insurance pricing."""
     
     def __init__(self):
-        # TODO: Replace with real insurer adapter based on configuration
-        self.adapter: InsurerAdapter = MockInsurerAdapter()
+        # Use Ancileo adapter for real API integration
+        self.adapter: InsurerAdapter = AncileoAdapter()
     
     def calculate_quote_range(
         self,
@@ -237,26 +238,14 @@ class PricingService:
         travelers_ages: List[int],
         adventure_sports: bool = False
     ) -> Dict[str, Any]:
-        """Calculate Step 1 quote with tiered pricing.
+        """Calculate Step 1 quote with tiered pricing using Ancileo API.
         
-        This method implements the MSIG pricing model with geographic areas
-        and three coverage tiers (Standard, Elite, Premier).
-        
-        Pricing Formula:
-        - Per-Traveler Base Price = Base Rate per Day × Duration × Age Multiplier
-        - Total Base Price = Sum of all travelers' per-traveler base prices
-        - Final Price for Tier = Total Base Price × Tier Multiplier
-        
-        Age Multipliers:
-        - Children (<18): 0.7
-        - Adults (18-64): 1.0
-        - Seniors (65-69): 1.3
-        - Seniors 70+: 1.5
-        
-        Tier Multipliers:
-        - Standard: 1.0
-        - Elite: 1.8
-        - Premier: 2.5
+        This method now integrates with the real Ancileo MSIG API:
+        1. Validates trip details
+        2. Calls Ancileo API via adapter
+        3. Uses Ancileo price as Elite tier baseline
+        4. Calculates Standard (÷1.8) and Premier (×1.39) tiers
+        5. Stores Ancileo reference data for purchase
         
         Args:
             destination: Country name (e.g., "Japan", "Thailand")
@@ -281,6 +270,7 @@ class PricingService:
                     "elite": {...},
                     "premier": {...}
                 },
+                "ancileo_reference": {...},  # For purchase API
                 "recommended_tier": str
             }
             
@@ -323,7 +313,7 @@ class PricingService:
                         "error": "Traveler age cannot exceed 110 years"
                     }
             
-            # Step 5: Get destination info
+            # Step 5: Get destination info and ISO code
             dest_info = GeoMapper.validate_destination(destination)
             if not dest_info["valid"]:
                 return {
@@ -332,73 +322,78 @@ class PricingService:
                 }
             
             area = dest_info["area"]
-            base_rate = dest_info["base_rate"]
             
-            # Step 6: Calculate per-traveler base prices
-            travelers_breakdown = []
-            for age in travelers_ages:
-                # Determine age category and multiplier
-                if age < 18:
-                    category = "child"
-                    age_multiplier = 0.7
-                elif age < 65:
-                    category = "adult"
-                    age_multiplier = 1.0
-                elif age < 70:
-                    category = "senior"
-                    age_multiplier = 1.3
-                else:
-                    category = "senior_plus"
-                    age_multiplier = 1.5
-                
-                # Calculate per-traveler base price
-                per_traveler_base_price = base_rate * duration * age_multiplier
-                
-                travelers_breakdown.append({
-                    "age": age,
-                    "category": category,
-                    "age_multiplier": age_multiplier,
-                    "base_price": round(per_traveler_base_price, 2)
-                })
+            # Get ISO country codes for Ancileo API
+            try:
+                arrival_country_iso = GeoMapper.get_country_iso_code(destination)
+            except ValueError as e:
+                return {
+                    "success": False,
+                    "error": str(e)
+                }
             
-            # Step 7: Calculate total base price
-            total_base_price = sum(t["base_price"] for t in travelers_breakdown)
+            # Step 6: Count adults and children for Ancileo API
+            adults_count = sum(1 for age in travelers_ages if age >= 18)
+            children_count = sum(1 for age in travelers_ages if age < 18)
             
-            # Step 8: Calculate quotes for each tier
+            # Ensure at least 1 adult for Ancileo API
+            if adults_count == 0:
+                adults_count = 1
+                children_count = max(0, children_count - 1)
+            
+            # Step 7: Call Ancileo API via adapter
+            adapter_input = {
+                "trip_type": "RT",  # Round trip
+                "departure_date": departure_date,
+                "return_date": return_date,
+                "departure_country": "SG",  # Singapore market
+                "arrival_country": arrival_country_iso,
+                "adults_count": adults_count,
+                "children_count": children_count
+            }
+            
+            pricing_result = self.adapter.price_firm(adapter_input)
+            
+            # Check if pricing was successful
+            if not pricing_result.get("eligibility", False):
+                return {
+                    "success": False,
+                    "error": pricing_result.get("breakdown", {}).get("error", "Failed to get pricing from Ancileo API")
+                }
+            
+            # Step 8: Extract tier prices from adapter response
+            tiers = pricing_result.get("tiers", {})
+            ancileo_reference = pricing_result.get("ancileo_reference")
+            
+            # Step 9: Build quotes structure
             quotes = {}
-            for tier, tier_multiplier in TIER_MULTIPLIERS.items():
+            for tier_name, tier_data in tiers.items():
                 # Skip tier if adventure sports required but tier doesn't support it
-                if adventure_sports and not TIER_COVERAGE[tier]["adventure_sports"]:
+                if adventure_sports and not tier_data.get("coverage", {}).get("adventure_sports", False):
                     continue
                 
-                # Calculate final price for tier
-                final_price = total_base_price * tier_multiplier
-                final_price = round(final_price, 2)
-                
-                # Build tier quote
-                quotes[tier] = {
-                    "tier": tier,
-                    "price": final_price,
-                    "currency": "SGD",
-                    "coverage": TIER_COVERAGE[tier],
+                quotes[tier_name] = {
+                    "tier": tier_name,
+                    "price": tier_data.get("price"),
+                    "currency": tier_data.get("currency", "SGD"),
+                    "coverage": tier_data.get("coverage"),
                     "breakdown": {
-                        "base_rate_per_day": base_rate,
                         "duration_days": duration,
-                        "travelers": travelers_breakdown,
-                        "total_base_price": round(total_base_price, 2),
-                        "tier_multiplier": tier_multiplier,
-                        "area": area.value
+                        "travelers_count": len(travelers_ages),
+                        "area": area.value,
+                        "source": "ancileo_api",
+                        "multiplier": tier_data.get("multiplier")
                     }
                 }
             
-            # Step 9: Determine recommended tier
+            # Step 10: Determine recommended tier
             if adventure_sports:
                 # Recommend elite if available, otherwise premier
                 recommended_tier = "elite" if "elite" in quotes else "premier"
             else:
                 recommended_tier = "standard"
             
-            # Step 10: Return success response
+            # Step 11: Return success response with Ancileo reference
             return {
                 "success": True,
                 "destination": destination,
@@ -409,10 +404,14 @@ class PricingService:
                 "travelers_count": len(travelers_ages),
                 "adventure_sports": adventure_sports,
                 "quotes": quotes,
+                "ancileo_reference": ancileo_reference,  # CRITICAL: Store for purchase
                 "recommended_tier": recommended_tier
             }
             
         except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in calculate_step1_quote: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": f"Unexpected error: {str(e)}"
