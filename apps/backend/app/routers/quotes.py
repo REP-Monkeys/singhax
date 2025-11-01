@@ -27,6 +27,7 @@ async def create_quote(
         user_id=current_user.id,
         trip_id=quote_data.trip_id,
         product_type=quote_data.product_type,
+        selected_tier=quote_data.selected_tier,
         travelers=quote_data.travelers,
         activities=quote_data.activities
     )

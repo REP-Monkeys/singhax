@@ -1,0 +1,153 @@
+{
+  "session_id": "96a65fda-2ec8-4bd2-b86a-84ef5f15a4e2",
+  "document_type": "itinerary",
+  "extracted_at": "2025-11-01T02:35:24.039391Z",
+  "source_filename": "sample_itinerary.pdf",
+  "trip_overview": {
+    "title": "Japan Trip",
+    "duration_days": 7,
+    "start_date": "2099-12-20",
+    "end_date": "2099-12-27",
+    "confidence": 0.95
+  },
+  "destinations": [
+    {
+      "city": "Tokyo",
+      "country": "Japan",
+      "arrival_date": "2099-12-20",
+      "departure_date": "2099-12-27",
+      "nights": 7,
+      "confidence": 0.92
+    }
+  ],
+  "activities": [
+    {
+      "date": "2099-12-20",
+      "location": "Tokyo",
+      "activity_type": "dinner",
+      "description": "Sample Restaurant Dinner",
+      "is_adventure_sport": false,
+      "risk_level": null,
+      "requires_special_coverage": null,
+      "confidence": 0.85
+    },
+    {
+      "date": "2099-12-21",
+      "location": "Tokyo",
+      "activity_type": "visit",
+      "description": "Sample Temple Visit",
+      "is_adventure_sport": false,
+      "risk_level": null,
+      "requires_special_coverage": null,
+      "confidence": 0.85
+    },
+    {
+      "date": "2099-12-21",
+      "location": "Tokyo",
+      "activity_type": "shopping",
+      "description": "Sample Shopping District",
+      "is_adventure_sport": false,
+      "risk_level": null,
+      "requires_special_coverage": null,
+      "confidence": 0.85
+    },
+    {
+      "date": "2099-12-21",
+      "location": "Tokyo",
+      "activity_type": "show",
+      "description": "Sample Cultural Show",
+      "is_adventure_sport": false,
+      "risk_level": null,
+      "requires_special_coverage": null,
+      "confidence": 0.85
+    },
+    {
+      "date": "2099-12-22",
+      "location": "Sample Mountain",
+      "activity_type": "excursion",
+      "description": "Sample Mountain Excursion",
+      "is_adventure_sport": true,
+      "risk_level": "medium",
+      "requires_special_coverage": null,
+      "confidence": 0.9
+    }
+  ],
+  "adventure_sports_detected": {
+    "has_adventure_sports": true,
+    "activities": [
+      {
+        "type": "mountain excursion",
+        "date": "2099-12-22",
+        "location": "Sample Mountain",
+        "risk_level": "medium",
+        "confidence": 0.9
+      }
+    ],
+    "confidence": 0.9
+  },
+  "risk_factors": {
+    "extreme_sports": false,
+    "water_sports": false,
+    "winter_sports": false,
+    "high_altitude_activities": false,
+    "motorized_sports": false,
+    "group_travel": null,
+    "remote_locations": false,
+    "political_risk_destinations": false,
+    "confidence": 0.8
+  },
+  "travelers": [
+    {
+      "name": {
+        "first": null,
+        "last": null,
+        "full": "TEST TRAVELER",
+        "confidence": 0.9
+      },
+      "age": null,
+      "role": "traveler",
+      "confidence": 0.9
+    }
+  ],
+  "trip_structure": {
+    "trip_type": "single_return",
+    "number_of_destinations": 1,
+    "requires_internal_travel": true,
+    "internal_transport": [
+      "Sample Transport"
+    ],
+    "confidence": 0.85
+  },
+  "confidence_thresholds": {
+    "high": 0.9,
+    "medium": 0.8,
+    "low": 0.8
+  },
+  "high_confidence_fields": [
+    "trip_overview.confidence",
+    "destinations[0].confidence",
+    "destinations[0].confidence",
+    "activities[4].confidence",
+    "activities[4].confidence",
+    "adventure_sports_detected.activities[0].confidence",
+    "adventure_sports_detected.activities[0].confidence",
+    "adventure_sports_detected.confidence",
+    "travelers[0].name.confidence",
+    "travelers[0].confidence",
+    "travelers[0].name.confidence",
+    "travelers[0].confidence"
+  ],
+  "low_confidence_fields": [
+    "activities[0].confidence",
+    "activities[0].confidence",
+    "activities[1].confidence",
+    "activities[1].confidence",
+    "activities[2].confidence",
+    "activities[2].confidence",
+    "activities[3].confidence",
+    "activities[3].confidence",
+    "risk_factors.confidence",
+    "trip_structure.confidence"
+  ],
+  "missing_fields": []
+}

@@ -171,8 +171,21 @@ def get_current_user_supabase(
         # Flush to ensure SET LOCAL is executed before query
         db.flush()
     except Exception as e:
+        error_msg = str(e)
+        # Check if this is a connection error
+        if "Connection refused" in error_msg or "OperationalError" in str(type(e).__name__) or "could not connect" in error_msg.lower():
+            print(f"[ERROR] Database connection failed during RLS setup: {error_msg}")
+            # Rollback and raise proper HTTP exception
+            try:
+                db.rollback()
+            except:
+                pass
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database connection failed. Please check your Supabase configuration and ensure the project is active."
+            )
         print(f"Warning: Failed to set RLS context: {e}")
-        # Don't fail the request if RLS context setting fails
+        # Don't fail the request if RLS context setting fails for other reasons
         # RLS policies will still work based on explicit user_id checks
         # Rollback the SET LOCAL statements if they failed
         try:
@@ -187,7 +200,7 @@ def get_current_user_supabase(
     except Exception as db_error:
         # Database connection error - provide helpful error message
         error_msg = str(db_error)
-        if "Connection refused" in error_msg or "OperationalError" in str(type(db_error).__name__):
+        if "Connection refused" in error_msg or "OperationalError" in str(type(db_error).__name__) or "could not connect" in error_msg.lower():
             print(f"[ERROR] Database connection failed: {error_msg}")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

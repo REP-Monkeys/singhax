@@ -371,22 +371,101 @@ async def upload_image(
             filename=file.filename or "uploaded_file"
         )
         
-        # Generate image ID
+        # Safety check: Ensure extracted_json is a dict, not a list
+        if isinstance(extracted_json, list):
+            print(f"⚠️  Warning: extracted_json is a list, attempting to extract first element")
+            if len(extracted_json) > 0 and isinstance(extracted_json[0], dict):
+                extracted_json = extracted_json[0]
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to extract document data: Invalid response format"
+                )
+        elif not isinstance(extracted_json, dict):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to extract document data: Unexpected type {type(extracted_json)}"
+            )
+        
+        # Step 3: Check document type and reject if unknown
+        document_type = extracted_json.get("document_type")
+        if document_type == "unknown":
+            raise HTTPException(
+                status_code=400,
+                detail="Sorry, I can only process travel-related documents. Please upload a flight confirmation, hotel booking, itinerary, or visa application."
+            )
+        
+        # Step 4: Store document file permanently and save to database
+        print(f"\n{'='*70}")
+        print(f"📤 STORING DOCUMENT")
+        print(f"{'='*70}")
+        print(f"👤 User ID: {current_user.id}")
+        print(f"💬 Session ID: {session_id}")
+        print(f"📄 Document Type: {document_type}")
+        print(f"📝 Filename: {file.filename}")
+        print(f"📦 File Size: {len(file_bytes)} bytes")
+        print(f"{'='*70}\n")
+        
+        from app.services.document_storage import DocumentStorageService
+        storage_service = DocumentStorageService()
+        
+        # Store file permanently
+        print(f"💾 Storing file...")
+        file_storage_info = storage_service.store_document_file(
+            user_id=str(current_user.id),
+            document_type=document_type,
+            file_bytes=file_bytes,
+            original_filename=file.filename or "uploaded_file",
+            content_type=file.content_type or "application/pdf"
+        )
+        print(f"✅ File stored successfully")
+        print(f"   Storage Type: {file_storage_info.get('storage_type', 'unknown')}")
+        print(f"   File Path: {file_storage_info.get('file_path', 'N/A')}")
+        
+        # Store extracted data in database
+        print(f"\n💾 Storing document data in database...")
+        storage_result = storage_service.store_extracted_document(
+            db=db,
+            user_id=str(current_user.id),
+            session_id=session_id,
+            extracted_json=extracted_json,
+            file_storage_info=file_storage_info,
+            json_file_path=extracted_json.get("json_file_path")
+        )
+        print(f"✅ Document data stored successfully")
+        print(f"   Document ID: {storage_result.get('id', 'N/A')}")
+        print(f"   Document Type: {storage_result.get('type', 'N/A')}")
+        
+        # Final summary
+        print(f"\n{'='*70}")
+        print(f"✅ DOCUMENT UPLOAD COMPLETE")
+        print(f"{'='*70}")
+        print(f"📄 Document ID: {storage_result.get('id', 'N/A')}")
+        print(f"📋 Document Type: {storage_result.get('type', 'N/A')}")
+        print(f"💬 Session ID: {session_id}")
+        print(f"👤 User ID: {current_user.id}")
+        print(f"📁 File stored at: {file_storage_info.get('file_path', 'N/A')}")
+        print(f"💾 Database record created: ✅")
+        
+        # Check trip connection
+        from app.models.trip import Trip
+        trip = db.query(Trip).filter(Trip.session_id == session_id).first()
+        if trip:
+            print(f"🔗 Connected to Trip: ✅")
+            print(f"   Trip ID: {trip.id}")
+            print(f"   Trip Status: {trip.status}")
+        else:
+            print(f"🔗 Connected to Trip: ⚠️  No trip found for this session")
+        print(f"{'='*70}\n")
+        
+        # Generate image ID for response (keeping for compatibility)
         image_id = f"img_{uuid.uuid4().hex[:12]}"
         
-        # Save file temporarily
-        uploads_dir = Path("apps/backend/uploads/temp")
-        uploads_dir.mkdir(parents=True, exist_ok=True)
-        file_path = uploads_dir / f"{image_id}{file_ext}"
-        
-        with open(file_path, "wb") as f:
-            f.write(file_bytes)
-        
-        # Step 3: Auto-process document via graph
+        # Step 5: Auto-process document via graph
         graph_result = None
         agent_message = None
         
-        if ocr_text and extracted_json.get("document_type") != "unknown":
+        if ocr_text:
             try:
                 graph = get_conversation_graph(db)
                 config = {"configurable": {"thread_id": session_id}}

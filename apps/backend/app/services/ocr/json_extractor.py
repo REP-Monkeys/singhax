@@ -83,9 +83,11 @@ Document text:
 {ocr_text[:3000]}
 
 Extract the following information with confidence scores (0.0-1.0):
-- Airline name and code
+- Trip type: "one_way" if no return flight, "return" if return flight exists
+- Airline name and code for outbound flight (going)
+- Airline name and code for inbound flight (returning) - only if return flight exists
 - Departure date, time, airport code, airport name
-- Return/arrival date, time, airport code, airport name
+- Return/arrival date, time, airport code, airport name (if return flight exists)
 - Flight numbers (outbound and inbound)
 - Destination country and city
 - Traveler names (first, last, full)
@@ -95,13 +97,19 @@ Extract the following information with confidence scores (0.0-1.0):
 - Booking reference (PNR, booking number)
 - Trip duration in days
 
+IMPORTANT: Determine trip_type based on whether a return flight exists. If return flight exists, set trip_type to "return" and include inbound airline. If no return flight, set trip_type to "one_way" and inbound airline should be null.
+
 Respond with ONLY a valid JSON object matching this structure:
 {{
     "session_id": "{session_id}",
     "document_type": "flight_confirmation",
     "extracted_at": "{datetime.utcnow().isoformat()}Z",
     "source_filename": "{filename}",
-    "airline": {{"name": "Scoot", "code": "TR", "confidence": 0.92}},
+    "trip_type": "return",
+    "airline": {{
+        "outbound": {{"name": "Scoot", "code": "TR", "confidence": 0.92}},
+        "inbound": {{"name": "Scoot", "code": "TR", "confidence": 0.92}}
+    }},
     "flight_details": {{
         "departure": {{"date": "2025-03-15", "time": "14:30", "airport_code": "SIN", "airport_name": "Singapore Changi Airport", "confidence": 0.91}},
         "return": {{"date": "2025-03-22", "time": "18:45", "airport_code": "NRT", "airport_name": "Narita International Airport", "confidence": 0.91}},
@@ -439,11 +447,24 @@ Only include fields where confidence >= 0.80. For fields below 0.80, set them to
             import re
             
             # Try to extract JSON from response (in case LLM adds extra text)
+            # First try to find a JSON object (starts with {)
             json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
             if json_match:
                 result_text = json_match.group(0)
             
-            result = json.loads(result_text)
+            parsed_result = json.loads(result_text)
+            
+            # Handle case where LLM returns a list instead of a dict
+            if isinstance(parsed_result, list):
+                print(f"⚠️  LLM returned a list instead of dict, attempting to extract first element")
+                if len(parsed_result) > 0 and isinstance(parsed_result[0], dict):
+                    result = parsed_result[0]
+                else:
+                    raise ValueError("LLM returned a list but first element is not a dict")
+            elif isinstance(parsed_result, dict):
+                result = parsed_result
+            else:
+                raise ValueError(f"LLM returned unexpected type: {type(parsed_result)}")
             
             # Ensure required metadata fields
             result["session_id"] = session_id

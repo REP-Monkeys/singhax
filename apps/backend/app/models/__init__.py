@@ -11,6 +11,10 @@ from .chat_history import ChatHistory
 from .audit_log import AuditLog
 from .rag_document import RagDocument
 from .payment import Payment
+from .flight import Flight
+from .hotel import Hotel
+from .visa import Visa
+from .itinerary import Itinerary
 
 __all__ = [
     "User",
@@ -23,4 +27,8 @@ __all__ = [
     "AuditLog",
     "RagDocument",
     "Payment",
+    "Flight",
+    "Hotel",
+    "Visa",
+    "Itinerary",
 ]

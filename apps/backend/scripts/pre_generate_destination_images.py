@@ -92,7 +92,8 @@ async def generate_and_save_image(
     client: OpenAI,
     destination: str,
     output_dir: Path,
-    delay_seconds: int = 15
+    delay_seconds: int = 60,
+    max_retries: int = 3
 ) -> bool:
     """Generate an image for a destination and save it.
     
@@ -100,7 +101,8 @@ async def generate_and_save_image(
         client: OpenAI client
         destination: Destination name
         output_dir: Directory to save images
-        delay_seconds: Delay between requests (default 15 to avoid rate limits)
+        delay_seconds: Delay between requests (default 60 seconds = 1 per minute)
+        max_retries: Maximum number of retries on rate limit errors
         
     Returns:
         True if successful, False otherwise
@@ -113,48 +115,66 @@ async def generate_and_save_image(
         print(f"⏭️  Skipping {destination} - image already exists")
         return True
     
-    try:
-        print(f"🎨 Generating image for {destination}...")
-        prompt = generate_prompt(destination)
-        
-        # Call DALL-E API (run in thread pool to avoid blocking)
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.images.generate(
-                model="dall-e-3",
-                prompt=prompt,
-                size="1024x1024",
-                quality="standard",
-                n=1,
-            )
-        )
-        
-        image_url = response.data[0].url
-        
-        # Download the image
-        async with httpx.AsyncClient(timeout=30.0) as http_client:
-            img_response = await http_client.get(image_url)
-            img_response.raise_for_status()
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                wait_time = 65  # Wait a bit more than 60 seconds to ensure window reset
+                print(f"🔄 Retry attempt {attempt + 1}/{max_retries} - waiting {wait_time} seconds for rate limit reset...")
+                await asyncio.sleep(wait_time)
             
-            # Save the image
-            with open(image_path, "wb") as f:
-                f.write(img_response.content)
-        
-        print(f"✅ Generated and saved image for {destination}")
-        
-        # Wait before next request to avoid rate limits
-        if delay_seconds > 0:
-            print(f"⏳ Waiting {delay_seconds} seconds before next request...")
-            await asyncio.sleep(delay_seconds)
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Failed to generate image for {destination}: {str(e)}")
-        if "rate_limit" in str(e).lower():
-            print(f"⚠️  Rate limit hit. Please wait and try again later.")
-        return False
+            print(f"🎨 Generating image for {destination}...")
+            prompt = generate_prompt(destination)
+            
+            # Call DALL-E API (run in thread pool to avoid blocking)
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: client.images.generate(
+                    model="dall-e-3",
+                    prompt=prompt,
+                    size="1024x1024",
+                    quality="standard",
+                    n=1,
+                )
+            )
+            
+            image_url = response.data[0].url
+            
+            # Download the image
+            async with httpx.AsyncClient(timeout=30.0) as http_client:
+                img_response = await http_client.get(image_url)
+                img_response.raise_for_status()
+                
+                # Save the image
+                with open(image_path, "wb") as f:
+                    f.write(img_response.content)
+            
+            print(f"✅ Generated and saved image for {destination}")
+            
+            # Wait before next request to avoid rate limits
+            if delay_seconds > 0:
+                print(f"⏳ Waiting {delay_seconds} seconds before next request...")
+                await asyncio.sleep(delay_seconds)
+            
+            return True
+            
+        except Exception as e:
+            error_str = str(e).lower()
+            if "rate_limit" in error_str or "429" in str(e):
+                if attempt < max_retries - 1:
+                    print(f"⚠️  Rate limit exceeded. Your account allows 1 image per minute.")
+                    print(f"   This means you've generated an image recently (within the last minute).")
+                    print(f"   Waiting for rate limit window to reset...")
+                    # Don't return False yet, will retry in next iteration
+                    continue
+                else:
+                    print(f"❌ Rate limit hit after {max_retries} attempts. Please wait a full minute and try again.")
+                    return False
+            else:
+                print(f"❌ Failed to generate image for {destination}: {str(e)}")
+                return False
+    
+    return False
 
 
 async def main():
@@ -169,14 +189,14 @@ async def main():
     # Initialize OpenAI client
     client = OpenAI(api_key=api_key)
     
-    # Setup output directory (frontend public directory)
+    # Setup output directory (frontend public/src directory)
     project_root = Path(__file__).parent.parent.parent
-    output_dir = project_root / "apps" / "frontend" / "public" / "destination-images"
+    output_dir = project_root / "apps" / "frontend" / "public" / "src"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"📁 Saving images to: {output_dir}")
     print(f"📋 Generating images for {len(COMMON_DESTINATIONS) + len(MULTI_DESTINATIONS)} destinations")
-    print(f"⏱️  Estimated time: ~{(len(COMMON_DESTINATIONS) + len(MULTI_DESTINATIONS)) * 15 / 60:.1f} minutes")
+    print(f"⏱️  Estimated time: ~{(len(COMMON_DESTINATIONS) + len(MULTI_DESTINATIONS)) * 60 / 60:.1f} minutes (1 image per minute)")
     print()
     
     # Generate images for single destinations
@@ -187,8 +207,9 @@ async def main():
     for i, destination in enumerate(all_destinations, 1):
         print(f"[{i}/{len(all_destinations)}] Processing {destination}...")
         
-        # Use 15 second delay between requests (except for first one)
-        delay = 15 if i > 1 else 0
+        # Always wait 60 seconds between requests (1 per minute rate limit)
+        # This ensures we never hit the rate limit, even if we've made requests recently
+        delay = 60
         
         success = await generate_and_save_image(
             client,

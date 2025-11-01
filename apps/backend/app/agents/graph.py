@@ -227,9 +227,10 @@ def create_conversation_graph(db) -> StateGraph:
         if "quote_data" not in state:
             state["quote_data"] = {}
         
-        state["_loop_count"] += 1
+        # Don't increment loop_count here - it's handled in should_continue to avoid double-counting
+        loop_count = state.get("_loop_count", 0)
         print(f"\n{'='*60}")
-        print(f"🔀 ORCHESTRATOR (iteration {state['_loop_count']})")
+        print(f"🔀 ORCHESTRATOR (iteration {loop_count})")
         print(f"{'='*60}")
         
         messages = state.get("messages", [])
@@ -238,13 +239,46 @@ def create_conversation_graph(db) -> StateGraph:
             return state
         
         last_message = messages[-1]
+        
+        # CRITICAL: Skip intent classification if last message is from AI
+        # This prevents re-classifying intent after we've already responded
+        if isinstance(last_message, AIMessage):
+            print(f"   ⏭️  Skipping intent classification (last message is AI)")
+            # Preserve existing intent if we have one, otherwise default to quote
+            if "current_intent" not in state:
+                state["current_intent"] = "quote"
+            return state
+        
         user_message = last_message.content if hasattr(last_message, 'content') else str(last_message)
+        
+        # Check if we're already in an active quote flow - don't re-classify unless user changes topic
+        in_active_flow = (
+            state.get("trip_details", {}).get("destination") or
+            state.get("current_question") or
+            state.get("awaiting_confirmation", False)
+        )
+        
+        # CRITICAL: Always re-classify when pricing is complete (user might want to purchase)
+        # This ensures LLM handles payment intent detection, not hardcoded keywords
+        pricing_complete = state.get("_pricing_complete", False)
+        
+        # If we're in an active flow and user message is short/continuing the conversation, 
+        # keep the quote intent without re-classifying (unless pricing is complete)
+        if in_active_flow and "current_intent" in state and not pricing_complete:
+            # Only re-classify if user seems to be changing topic (mentions policy, claim, etc.)
+            # Note: Payment detection handled by LLM when pricing_complete is True
+            user_lower = user_message.lower()
+            topic_change_keywords = ["policy", "claim", "coverage", "what does", "explain", "document", "upload"]
+            if not any(keyword in user_lower for keyword in topic_change_keywords):
+                print(f"   ⏭️  In active quote flow, preserving intent: {state.get('current_intent')}")
+                return state
         
         # Get conversation history for context
         history = []
         for msg in messages[-5:]:  # Last 5 messages
-            content = msg.content if hasattr(msg, 'content') else str(msg)
-            history.append(content)
+            if isinstance(msg, HumanMessage) or (hasattr(msg, 'content') and not isinstance(msg, AIMessage)):
+                content = msg.content if hasattr(msg, 'content') else str(msg)
+                history.append(content)
         
         # Use LLM to classify intent
         intent_result = llm_client.classify_intent(user_message, history)
@@ -568,41 +602,8 @@ def create_conversation_graph(db) -> StateGraph:
                     state["current_question"] = ""  # Clear the question
                     print(f"   ✅ User confirmed - ready for pricing")
                     
-                    # Generate policy recommendation if we have enough data
-                    try:
-                        policy_recommender = PolicyRecommender()
-                        
-                        # Build extracted data structure for recommendation
-                        extracted_data = {
-                            "travelers": [
-                                {
-                                    "age": age,
-                                    "pre_existing_conditions": {"has_conditions": False}  # Would need to ask separately
-                                }
-                                for age in state.get("travelers_data", {}).get("ages", [])
-                            ],
-                            "trip_details": {
-                                "destination": {"country": state.get("trip_details", {}).get("destination")},
-                                "trip_type": {"value": "single_return"},  # Default assumption
-                                "duration_days": {"value": None}  # Would calculate from dates
-                            },
-                            "activities": {
-                                "adventure_sports": {"value": state.get("preferences", {}).get("adventure_sports", False)}
-                            },
-                            "airline_info": {"is_scoot": False}  # Would detect from document
-                        }
-                        
-                        recommendation = policy_recommender.recommend_policy(extracted_data)
-                        
-                        response = "Great! Based on your trip details, I recommend:\n\n"
-                        response += f"**{recommendation.get('recommended_policy', 'Travel Insurance')}** "
-                        response += f"({recommendation.get('recommended_tier', 'Standard')} tier)\n\n"
-                        response += f"{recommendation.get('reasoning', '')}\n\n"
-                        response += "Let me calculate your insurance options..."
-                        
-                    except Exception as e:
-                        print(f"   ⚠️  Policy recommendation failed: {e}")
-                        response = "Great! Let me calculate your insurance options..."
+                    # Simple confirmation response - policy recommendation removed to avoid verbose LLM-generated messages
+                    response = "Great! Let me calculate your insurance options..."
                     
                     state["messages"].append(AIMessage(content=response))
                     return state
@@ -816,18 +817,127 @@ Is this information correct? (yes/no)"""
             )
             
             if not quote_result["success"]:
-                # Error in quote calculation - provide friendly error message
+                # Error in quote calculation - try fallback pricing
                 error_msg = quote_result.get("error", "Unknown error")
-                if "182 days" in error_msg:
-                    response = "Your trip is a bit too long for our standard coverage (maximum 182 days). Let me connect you with a specialist who can help with extended coverage."
-                elif "age" in error_msg.lower():
-                    response = "I noticed one of the ages might not be quite right. Travelers should be between 1 month and 110 years old. Could you double-check the ages?"
-                else:
-                    response = f"I'm sorry, but I encountered an issue: {error_msg}. Let me connect you with a human agent who can help."
+                print(f"   ⚠️  Pricing service failed: {error_msg}")
                 
-                state["requires_human"] = True
-                state["messages"].append(AIMessage(content=response))
-                return state
+                # Check if we have area and base_rate for fallback pricing
+                area = trip.get("area")
+                base_rate = trip.get("base_rate")
+                
+                if area and base_rate:
+                    print(f"   🔄 Attempting fallback pricing using area={area}, base_rate={base_rate}")
+                    # Calculate fallback quotes using base_rate and multipliers
+                    from datetime import timedelta
+                    # Handle date strings or date objects
+                    if isinstance(departure_date, str):
+                        departure_date_obj = date.fromisoformat(departure_date)
+                    else:
+                        departure_date_obj = departure_date
+                    if isinstance(return_date, str):
+                        return_date_obj = date.fromisoformat(return_date)
+                    else:
+                        return_date_obj = return_date
+                    duration = (return_date_obj - departure_date_obj).days + 1
+                    num_travelers = len(travelers_ages)
+                    
+                    # Calculate base price per traveler per day
+                    base_price = base_rate * duration * num_travelers
+                    
+                    # Tier multipliers (matching PricingService)
+                    standard_price = round(base_price * 1.0, 2)
+                    elite_price = round(base_price * 1.2, 2)
+                    premier_price = round(base_price * 1.5, 2)
+                    
+                    # Default coverage amounts (reasonable estimates)
+                    coverage_standard = {
+                        "medical_coverage": 50000,
+                        "trip_cancellation": 10000,
+                        "baggage_loss": 3000,
+                        "personal_accident": 25000
+                    }
+                    coverage_elite = {
+                        "medical_coverage": 100000,
+                        "trip_cancellation": 20000,
+                        "baggage_loss": 5000,
+                        "personal_accident": 50000,
+                        "adventure_sports": True
+                    }
+                    coverage_premier = {
+                        "medical_coverage": 200000,
+                        "trip_cancellation": 50000,
+                        "baggage_loss": 10000,
+                        "personal_accident": 100000,
+                        "adventure_sports": True,
+                        "emergency_evacuation": 500000
+                    }
+                    
+                    # Build fallback quote_result
+                    quotes = {}
+                    quotes["standard"] = {
+                        "tier": "standard",
+                        "price": standard_price,
+                        "currency": "SGD",
+                        "coverage": coverage_standard,
+                        "breakdown": {
+                            "duration_days": duration,
+                            "travelers_count": num_travelers,
+                            "area": area,
+                            "source": "fallback_calculation"
+                        }
+                    }
+                    quotes["elite"] = {
+                        "tier": "elite",
+                        "price": elite_price,
+                        "currency": "SGD",
+                        "coverage": coverage_elite,
+                        "breakdown": {
+                            "duration_days": duration,
+                            "travelers_count": num_travelers,
+                            "area": area,
+                            "source": "fallback_calculation"
+                        }
+                    }
+                    quotes["premier"] = {
+                        "tier": "premier",
+                        "price": premier_price,
+                        "currency": "SGD",
+                        "coverage": coverage_premier,
+                        "breakdown": {
+                            "duration_days": duration,
+                            "travelers_count": num_travelers,
+                            "area": area,
+                            "source": "fallback_calculation"
+                        }
+                    }
+                    
+                    quote_result = {
+                        "success": True,
+                        "destination": destination,
+                        "area": area,
+                        "departure_date": departure_date.isoformat() if isinstance(departure_date, date) else departure_date,
+                        "return_date": return_date.isoformat() if isinstance(return_date, date) else return_date,
+                        "duration_days": duration,
+                        "travelers_count": num_travelers,
+                        "adventure_sports": adventure_sports,
+                        "quotes": quotes,
+                        "ancileo_reference": None,  # No Ancileo reference for fallback
+                        "recommended_tier": "elite" if adventure_sports else "standard",
+                        "fallback": True  # Flag to indicate this is a fallback quote
+                    }
+                    print(f"   ✅ Fallback pricing calculated successfully")
+                else:
+                    # No fallback possible - need human help
+                    if "182 days" in error_msg:
+                        response = "Your trip is a bit too long for our standard coverage (maximum 182 days). Let me connect you with a specialist who can help with extended coverage."
+                    elif "age" in error_msg.lower():
+                        response = "I noticed one of the ages might not be quite right. Travelers should be between 1 month and 110 years old. Could you double-check the ages?"
+                    else:
+                        response = f"I'm sorry, but I encountered an issue calculating your quote. Let me connect you with a human agent who can help."
+                    
+                    state["requires_human"] = True
+                    state["messages"].append(AIMessage(content=response))
+                    return state
             
             # Store full quote result
             state["quote_data"] = quote_result
@@ -895,6 +1005,10 @@ Is this information correct? (yes/no)"""
 """)
             
             response_parts.append("\nAll prices are in Singapore Dollars (SGD). Would you like more details about any plan?")
+            
+            # Add note if using fallback pricing
+            if quote_result.get("fallback"):
+                response_parts.append("\n\n⚠️ *Note: Quote calculated using estimated pricing. Our pricing service is temporarily unavailable, but these estimates should give you a good idea of costs.*")
             
             # Add risk narrative if available
             if state.get("risk_narrative"):
@@ -1085,9 +1199,10 @@ Is this information correct? (yes/no)"""
                     # Store payment info in state
                     state["_payment_intent_id"] = payment_intent_id
                     state["_awaiting_payment_confirmation"] = True
-                    
+                    state["_checkout_url_sent"] = True  # Flag to prevent re-entry
+
                     response = f"Great! I've set up your payment for the **{tier.title()}** plan (${price:.2f} SGD).\n\nPlease complete your payment at:\n{checkout_url}\n\nI'll wait here and confirm once payment is successful. This usually takes 10-30 seconds after you complete the payment."
-                
+
                 state["messages"].append(AIMessage(content=response))
             
             return state
@@ -1096,8 +1211,10 @@ Is this information correct? (yes/no)"""
             print(f"   ⚠️  Payment processor error: {e}")
             import traceback
             traceback.print_exc()
-            response = "I encountered an error processing the payment. Let me connect you with a human agent."
+            # Mark that payment processing failed to prevent recursion
+            state["_payment_failed"] = True
             state["requires_human"] = True
+            response = "I encountered an error processing the payment. Let me connect you with a human agent."
             state["messages"].append(AIMessage(content=response))
             return state
     
@@ -1601,25 +1718,27 @@ What would you like to know more about?"""
         quote_data = state.get("quote_data")
         intent = state.get("current_intent", "")
         
-        # Check for purchase intent (from LLM classification or keywords)
+        # Check for purchase intent (from LLM classification only - no hardcoded keyword matching)
         purchase_intent = (intent == "purchase")
-        
-        # Also check for purchase keywords if intent wasn't classified as purchase
-        if not purchase_intent:
-            messages = state.get("messages", [])
-            if messages:
-                last_msg = messages[-1]
-                user_input = last_msg.content.lower() if hasattr(last_msg, 'content') else str(last_msg).lower()
-                purchase_keywords = ["buy", "purchase", "checkout", "take it", "i'll take", "i want", "get", "proceed"]
-                purchase_intent = any(keyword in user_input for keyword in purchase_keywords)
-        
-        if awaiting_payment or (purchase_intent and quote_data and quote_data.get("quotes")):
+
+        # Prevent recursion: don't route to payment_processor if payment already failed or checkout URL already sent
+        payment_failed = state.get("_payment_failed", False)
+        checkout_url_sent = state.get("_checkout_url_sent", False)
+
+        # If we just sent the checkout URL, END to let user complete payment
+        if checkout_url_sent and awaiting_payment:
+            print(f"   → END (checkout URL sent, waiting for user to complete payment)")
+            log_conversation_metrics(state)
+            return END
+
+        if awaiting_payment or (purchase_intent and quote_data and quote_data.get("quotes") and not payment_failed):
             print(f"   → payment_processor")
             return "payment_processor"
         
         # Priority 3: If pricing is complete (but no purchase intent), END
-        if state.get("_pricing_complete", False):
-            print(f"   → END (pricing complete)")
+        # Only END if pricing complete AND no purchase intent detected
+        if state.get("_pricing_complete", False) and not purchase_intent:
+            print(f"   → END (pricing complete, no purchase intent)")
             log_conversation_metrics(state)
             return END
 
@@ -1633,18 +1752,13 @@ What would you like to know more about?"""
             pass  # Handle policy explanation
         
         # Priority 2: Check if we're in an active quote flow first
+        # Check if we're in an active quote flow first
         # If user has confirmed and we're ready for pricing, prioritize quote flow over handoff
         confirmation_received = state.get("confirmation_received", False)
         ready_for_pricing = state.get("_ready_for_pricing", False)
         in_active_quote_flow = confirmation_received or ready_for_pricing or state.get("trip_details", {}).get("destination")
         
-        # Priority 3: Human handoff (but NOT if we're in active quote flow)
-        if state.get("requires_human") and not in_active_quote_flow:
-            print(f"   → customer_service (requires_human, not in quote flow)")
-            return "customer_service"
-        
-        # Priority 4: Non-quote intents
-        intent = state.get("current_intent", "")
+        # Priority 5: Non-quote intents
         if intent == "document_upload":
             print(f"   → process_document")
             return "process_document"
@@ -1659,7 +1773,7 @@ What would you like to know more about?"""
             print(f"   → customer_service (human_handoff intent, not in quote flow)")
             return "customer_service"
         
-        # Priority 5: Quote flow with clear progression
+        # Priority 6: Quote flow with clear progression
         if intent == "quote" or intent == "" or in_active_quote_flow:
             # Re-get these values (already checked above but being explicit)
             confirmation_received = state.get("confirmation_received", False)
@@ -1668,7 +1782,9 @@ What would you like to know more about?"""
             current_question = state.get("current_question", "")
             awaiting_confirmation = state.get("awaiting_confirmation", False)
             has_area = state.get("trip_details", {}).get("area") is not None
-            has_quote = state.get("quote_data") is not None
+            # Check if quote_data actually has quotes (not just an empty dict)
+            quote_data = state.get("quote_data", {})
+            has_quote = bool(quote_data and quote_data.get("quotes"))
             
             print(f"   confirmed={confirmation_received}, ready={ready_for_pricing}")
             print(f"   area={has_area}, quote={has_quote}, complete={pricing_complete}")
@@ -1680,15 +1796,23 @@ What would you like to know more about?"""
                 log_conversation_metrics(state)
                 return END
             
-            # CRITICAL FIX: If we're waiting for user response, check if last message is from user
-            # If we asked a question AND the last message is from AI, END turn
-            # If we asked a question AND the last message is from user, process the answer
+            # CRITICAL FIX: If we're waiting for user response, check if last message is from AI
+            # If we asked a question AND the last message is from AI, END turn (waiting for user)
+            # If we asked a question AND the last message is from user, process the answer (continue)
             messages = state.get("messages", [])
             if messages:
                 last_msg_is_ai = isinstance(messages[-1], AIMessage)
+                # If we have a question pending and the last message is AI, we're done for this turn
                 if (current_question or awaiting_confirmation) and last_msg_is_ai:
-                    print(f"   → END (waiting for user response)")
+                    print(f"   → END (waiting for user response, AI message just added)")
                     return END
+                # Also: if last message is AI and we're in quote flow but not actively processing, END
+                # This prevents re-routing after needs_assessment adds a response
+                if last_msg_is_ai and in_active_quote_flow and not awaiting_confirmation and not confirmation_received:
+                    # End if we don't have a current question (meaning we just asked one or finished processing)
+                    if not current_question:
+                        print(f"   → END (AI response added, turn complete)")
+                        return END
             
             # If confirmed and ready, proceed through pricing flow
             if confirmation_received and ready_for_pricing:
