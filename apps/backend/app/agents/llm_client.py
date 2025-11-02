@@ -175,7 +175,7 @@ Respond with ONLY a valid JSON object:
             # Define extraction function schema
             extraction_function = {
                 "name": "extract_trip_information",
-                "description": "Extract travel insurance quote information from user message",
+                "description": "Extract travel insurance quote information from user message, ask if there are any other clarifications or information needed",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -225,17 +225,63 @@ IMPORTANT RULES:
 1. ONLY extract NEW information from the user's message
 2. Do NOT override existing information unless the user is explicitly correcting it
 3. For dates, be lenient with formats but always convert to YYYY-MM-DD
-4. DATE HANDLING CRITICAL:
-   - If user gives dates without year (e.g., "25 jan to 30 jan"), infer the correct year:
-     * If current month is past the mentioned month, use NEXT year
-     * If current month is before or same as mentioned month, use CURRENT year (if still in future) or NEXT year
-   - departure_date MUST be in the future relative to current date
-   - return_date MUST be AFTER departure_date
-   - Examples: "25 jan to 30 jan" in November 2025 → "2026-01-25" to "2026-01-30"
-5. For travelers_ages, extract all mentioned ages as integers
-6. If information is unclear or ambiguous, do NOT extract it
-7. Return ONLY the fields that you can confidently extract from this message
-8. CRITICAL: For adventure_sports, ONLY extract if the user EXPLICITLY mentions adventure activities, sports, skiing, diving, trekking, bungee jumping, or similar activities. Do NOT infer or assume False if not mentioned.
+
+4. DATE HANDLING - BE VERY LENIENT WITH FORMATS:
+   - Accept ANY date format: "11th jan", "january 20th", "next week", "Dec 25", "tomorrow", "tmrw", etc.
+   - Handle common typos: "tommorow", "tommorrow", "tomorow" all mean tomorrow
+   - Handle relative dates and convert to absolute dates:
+     * "tomorrow" / "tommorow" / "tmrw" → current date + 1 day
+     * "next week" → current date + 7 days  
+     * "next month" → current date + 30 days
+     * "in 3 days" → current date + 3 days
+   - Always convert to YYYY-MM-DD format in your response
+   - departure_date MUST be in the future relative to current date ({current_date})
+   - return_date MUST be AFTER departure_date (chronologically later, NOT before)
+   - When user gives dates without year, calculate which year makes both dates valid:
+     * Both dates must be in the future
+     * return_date must come AFTER departure_date in calendar order
+     * Example: User says "20 jan to 25 jan" on Nov 2, 2025 → Use "2026-01-20" to "2026-01-25"
+     * Example: User says "20 dec to 5 jan" on Nov 2, 2025 → Use "2025-12-20" to "2026-01-05"
+     * Example: User says "15 nov to 20 nov" on Nov 2, 2025 → Use "2025-11-15" to "2025-11-20"
+     * Example: User says "11th jan" on Nov 2, 2025 → Use "2026-01-11"
+     * Example: User says "tomorrow" or "tommorow" on Nov 2, 2025 → Use "2025-11-03"
+   - VALIDATION STEP: Before returning dates, verify that return_date > departure_date
+   - If dates would be invalid (return before departure), DO NOT extract them - leave them null
+
+5. LOGICAL IMPOSSIBILITY DETECTION - CRITICAL:
+   - Always validate that extracted information makes logical sense
+   - Set adventure_sports to False if activities are impossible for the destination:
+     * Scuba diving/diving in LANDLOCKED countries (Nepal, Switzerland, Austria, Mongolia, Bolivia, etc.)
+     * Skiing/snow sports in TROPICAL/BEACH destinations (Thailand, Phuket, Bali, Philippines, Singapore, Indonesia, Malaysia, Vietnam, etc.)
+     * Winter sports in equatorial/tropical regions
+   - Examples of impossible combinations:
+     * "scuba diving in Nepal" → adventure_sports = False (Nepal is landlocked, no ocean)
+     * "skiing in Thailand" → adventure_sports = False (Thailand is tropical, no snow)
+     * "surfing in Switzerland" → adventure_sports = False (landlocked)
+   - DO NOT extract activities that are geographically impossible
+   - These are likely user errors, jokes, or testing - treat as False/no adventure sports
+
+6. CONTRADICTORY INFORMATION HANDLING:
+   - If the user provides information that contradicts what was already collected, DO NOT extract it
+   - If dates don't make logical sense together (e.g., return before departure), leave them null
+   - If traveler ages seem incorrect or contradictory (negative, over 120, etc.), leave them null
+   - The system will ask for clarification when you leave fields null
+
+7. INCOMPLETE INFORMATION HANDLING:
+   - If information is unclear, ambiguous, or only partially provided, do NOT extract it
+   - Better to leave a field null and ask for clarification than to guess
+   - Examples of incomplete info that should NOT be extracted:
+     * "going in January" (no specific dates) → leave departure_date and return_date null
+     * "2 people" (no ages given) → leave travelers_ages null
+     * Vague regions like "Asia" or "Europe" → leave destination null
+   - IMPORTANT: Country names ARE sufficient for destination - "Nepal", "Japan", "Thailand" are all valid
+   - You DON'T need a specific city - just the country is enough
+
+8. For travelers_ages, extract all mentioned ages as integers (must be positive, under 120)
+
+9. Return ONLY the fields that you can confidently extract from this message
+
+10. CRITICAL: For adventure_sports, ONLY extract if the user EXPLICITLY mentions adventure activities that are POSSIBLE at the destination. Set to False if they mention impossible activities (skiing in tropical places).
 
 Extract information and call the function with the extracted data."""
             
@@ -275,7 +321,7 @@ Extract information and call the function with the extracted data."""
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
+        temperature: float = 0.8,
         max_tokens: int = 500,
         **kwargs
     ) -> str:

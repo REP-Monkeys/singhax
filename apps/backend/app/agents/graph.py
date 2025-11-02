@@ -510,8 +510,192 @@ def create_conversation_graph(db) -> StateGraph:
             
             print(f"   🔍 Extracted data from LLM: {extracted}")
             print(f"   📝 Current question: {current_q}")
+            print(f"   📝 User input: '{user_input[:100]}...'" if len(user_input) > 100 else f"   📝 User input: '{user_input}'")
             
-            if "destination" in extracted:
+            # SPECIAL HANDLING: Check if user is confirming ONLY when we explicitly asked for confirmation
+            user_lower = user_input.lower().strip()
+            confirmation_words = ["yes", "yeah", "yep", "correct", "right", "that's right", "that's correct", 
+                                 "confirmed", "confirm", "yup", "absolutely", "definitely", "indeed", "exactly"]
+            is_confirming = any(word == user_lower or user_lower.startswith(word + " ") for word in confirmation_words)
+            
+            # Check if our last message was a confirmation question
+            last_ai_message = None
+            for msg in reversed(state["messages"]):
+                if isinstance(msg, AIMessage):
+                    last_ai_message = msg.content.lower()
+                    break
+            
+            asked_confirmation = last_ai_message and any(phrase in last_ai_message for phrase in [
+                "is this correct", "is that correct", "is this right", "is indonesia correct",
+                "correct?", "right?", "does this look right", "is everything correct"
+            ])
+            
+            if is_confirming and current_q and asked_confirmation:
+                # User is confirming an explicitly asked question
+                field_already_set = False
+                if current_q == "destination" and trip.get("destination"):
+                    field_already_set = True
+                    extracted_info = True
+                    print(f"   ✅ User confirmed existing destination: {trip['destination']}")
+                elif current_q == "departure_date" and trip.get("departure_date"):
+                    field_already_set = True
+                    extracted_info = True
+                    print(f"   ✅ User confirmed existing departure_date: {trip['departure_date']}")
+                elif current_q == "return_date" and trip.get("return_date"):
+                    field_already_set = True
+                    extracted_info = True
+                    print(f"   ✅ User confirmed existing return_date: {trip['return_date']}")
+                elif current_q == "travelers" and travelers.get("ages"):
+                    field_already_set = True
+                    extracted_info = True
+                    print(f"   ✅ User confirmed existing travelers: {travelers['ages']}")
+                
+                if field_already_set:
+                    # Clear the question and skip further extraction
+                    state["current_question"] = ""
+                    state[f"{current_q}_failed_attempts"] = 0
+                    # Jump to end of extraction logic
+                    print(f"   ⏭️  Skipping extraction - user confirmed existing value after explicit confirmation question")
+            
+            # FALLBACK: If LLM didn't extract destination but we're asking for it, check for common country keywords
+            if not extracted_info and current_q == "destination" and "destination" not in extracted:
+                user_lower = user_input.lower()
+                # Common destination keywords (case-insensitive)
+                destination_keywords = {
+                    "thailand": "Thailand", "thai": "Thailand", "phuket": "Thailand", "bangkok": "Thailand",
+                    "japan": "Japan", "tokyo": "Japan", "osaka": "Japan", "kyoto": "Japan",
+                    "singapore": "Singapore", "sg": "Singapore",
+                    "malaysia": "Malaysia", "kl": "Malaysia", "kuala lumpur": "Malaysia", "penang": "Malaysia",
+                    "indonesia": "Indonesia", "bali": "Indonesia", "jakarta": "Indonesia",
+                    "vietnam": "Vietnam", "hanoi": "Vietnam", "saigon": "Vietnam", "ho chi minh": "Vietnam",
+                    "philippines": "Philippines", "manila": "Philippines", "cebu": "Philippines",
+                    "south korea": "South Korea", "korea": "South Korea", "seoul": "South Korea", "busan": "South Korea",
+                    "nepal": "Nepal", "kathmandu": "Nepal", "napl": "Nepal",  # Include common typo
+                    "india": "India", "delhi": "India", "mumbai": "India", "goa": "India",
+                    "australia": "Australia", "sydney": "Australia", "melbourne": "Australia",
+                    "new zealand": "New Zealand", "auckland": "New Zealand",
+                    "china": "China", "beijing": "China", "shanghai": "China",
+                    "taiwan": "Taiwan", "taipei": "Taiwan",
+                    "hongkong": "Hong Kong", "hong kong": "Hong Kong", "hk": "Hong Kong"
+                }
+                
+                for keyword, country in destination_keywords.items():
+                    if keyword in user_lower:
+                        extracted["destination"] = country
+                        print(f"   🔧 Fallback: Extracted destination '{country}' from keyword '{keyword}'")
+                        break
+            
+            # FALLBACK: Always validate departure_date with dateutil
+            if not extracted_info and current_q == "departure_date":
+                from datetime import timedelta
+                from dateutil import parser as dateutil_parser
+                today = date.today()
+                validated_date = None
+                
+                # Try to validate LLM's extraction first
+                llm_date = extracted.get("departure_date")
+                if llm_date:
+                    try:
+                        parsed = dateutil_parser.parse(llm_date, fuzzy=True, default=datetime(today.year, today.month, today.day))
+                        validated_date = parsed.date()
+                        if validated_date < today:
+                            validated_date = validated_date.replace(year=today.year + 1)
+                        print(f"   🔧 Validated LLM date '{llm_date}' to '{validated_date.isoformat()}'")
+                    except Exception as e:
+                        print(f"   ⚠️  LLM extracted invalid departure_date: '{llm_date}' - {e}")
+                
+                # If LLM validation failed, parse raw user input
+                if not validated_date:
+                    user_lower = user_input.lower()
+                    
+                    # First check common relative date keywords
+                    if any(word in user_lower for word in ["tomorrow", "tommorow", "tommorrow", "tomorow", "tmrw"]):
+                        validated_date = today + timedelta(days=1)
+                        print(f"   🔧 Fallback: Extracted 'tomorrow' as departure_date: {validated_date.isoformat()}")
+                    elif "next week" in user_lower:
+                        validated_date = today + timedelta(days=7)
+                        print(f"   🔧 Fallback: Extracted 'next week' as departure_date: {validated_date.isoformat()}")
+                    elif "next month" in user_lower:
+                        validated_date = today + timedelta(days=30)
+                        print(f"   🔧 Fallback: Extracted 'next month' as departure_date: {validated_date.isoformat()}")
+                    else:
+                        # Try parsing natural dates like "november 11", "11 nov", "jan 15", "nov 5"
+                        try:
+                            parsed = dateutil_parser.parse(user_input, fuzzy=True, default=datetime(today.year, today.month, today.day))
+                            validated_date = parsed.date()
+                            
+                            # If parsed date is in the past, assume next year
+                            if validated_date < today:
+                                validated_date = validated_date.replace(year=today.year + 1)
+                            
+                            print(f"   🔧 Fallback: Parsed '{user_input}' to '{validated_date.isoformat()}'")
+                        except Exception as e:
+                            print(f"   ⚠️  Failed to parse departure_date from user_input: {e}")
+                
+                # Only set if we got a valid date
+                if validated_date:
+                    extracted["departure_date"] = validated_date.isoformat()
+                else:
+                    extracted.pop("departure_date", None)  # Remove invalid extraction
+            
+            # FALLBACK: Always validate return_date with dateutil
+            if not extracted_info and current_q == "return_date":
+                from datetime import timedelta
+                from dateutil import parser as dateutil_parser
+                today = date.today()
+                departure = trip.get("departure_date")
+                validated_date = None
+                
+                # Try to validate LLM's extraction first
+                llm_date = extracted.get("return_date")
+                if llm_date:
+                    try:
+                        parsed = dateutil_parser.parse(llm_date, fuzzy=True, default=datetime(today.year, today.month, today.day))
+                        validated_date = parsed.date()
+                        
+                        # If parsed date is in the past, assume next year
+                        if validated_date < today:
+                            validated_date = validated_date.replace(year=today.year + 1)
+                        
+                        # If we have a departure date and return is before it, try next year
+                        if departure:
+                            if isinstance(departure, str):
+                                departure = parse_date_safe(departure)
+                            if validated_date <= departure:
+                                validated_date = validated_date.replace(year=validated_date.year + 1)
+                        
+                        print(f"   🔧 Validated LLM return_date '{llm_date}' to '{validated_date.isoformat()}'")
+                    except Exception as e:
+                        print(f"   ⚠️  LLM extracted invalid return_date: '{llm_date}' - {e}")
+                
+                # If LLM validation failed, parse raw user input
+                if not validated_date:
+                    try:
+                        parsed = dateutil_parser.parse(user_input, fuzzy=True, default=datetime(today.year, today.month, today.day))
+                        validated_date = parsed.date()
+                        
+                        # If parsed date is in the past, assume next year
+                        if validated_date < today:
+                            validated_date = validated_date.replace(year=today.year + 1)
+                        
+                        # If we have a departure date and return is before it, try next year
+                        if departure:
+                            if isinstance(departure, str):
+                                departure = parse_date_safe(departure)
+                            if validated_date <= departure:
+                                validated_date = validated_date.replace(year=validated_date.year + 1)
+                        
+                        print(f"   🔧 Fallback: Parsed '{user_input}' as return_date to '{validated_date.isoformat()}'")
+                    except Exception as e:
+                        print(f"   ⚠️  Failed to parse return_date from user_input: {e}")
+                
+                # Only set if we got a valid date
+                if validated_date:
+                    extracted["return_date"] = validated_date.isoformat()
+                else:
+                    extracted.pop("return_date", None)  # Remove invalid extraction
+            
+            if not extracted_info and "destination" in extracted:
                 trip["destination"] = extracted["destination"]
                 print(f"   ✅ Extracted destination: {extracted['destination']}")
                 if current_q == "destination":
@@ -749,14 +933,69 @@ def create_conversation_graph(db) -> StateGraph:
                         prefs["adventure_sports"] = False
                         extracted_info = True
                     else:
-                        # Extraction matches user intent, accept it
-                        prefs["adventure_sports"] = extracted["adventure_sports"]
-                        extracted_info = True
-                        print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (validated against user input)")
+                        # Extraction matches user intent, but validate for impossibilities
+                        dest = trip.get("destination", "").lower()
+                        is_impossible = False
+                        impossibility_msg = ""
+                        
+                        # Check for diving in landlocked countries
+                        landlocked = ["nepal", "switzerland", "austria", "bolivia", "mongolia", "laos", "tibet",
+                                     "afghanistan", "bhutan", "czech", "hungary", "slovakia", "zambia", "zimbabwe"]
+                        water_sports = ["scuba", "diving", "snorkel", "surf", "jet ski", "parasailing"]
+                        
+                        if any(country in dest for country in landlocked) and any(sport in user_input_lower for sport in water_sports):
+                            is_impossible = True
+                            impossibility_msg = f"I noticed you mentioned water/diving activities, but {trip.get('destination', 'your destination')} is a landlocked country without ocean access. Did you mean a different activity like trekking or hiking? I've set adventure sports to 'no' for now."
+                        
+                        # Check for snow sports in tropical countries
+                        tropical = ["thailand", "phuket", "bali", "philippines", "singapore", "indonesia", "malaysia", 
+                                   "vietnam", "cambodia", "myanmar", "fiji", "maldives", "sri lanka", "india", "goa"]
+                        snow_sports = ["skiing", "snowboard", "snow", "ski"]
+                        
+                        if any(country in dest for country in tropical) and any(sport in user_input_lower for sport in snow_sports):
+                            is_impossible = True
+                            impossibility_msg = f"I noticed you mentioned skiing/snow sports, but {trip.get('destination', 'your destination')} is a tropical destination without snow. Did you mean water skiing or another activity? I've set adventure sports to 'no' for now."
+                        
+                        if is_impossible:
+                            prefs["adventure_sports"] = False
+                            extracted_info = True
+                            state["_impossibility_detected"] = impossibility_msg
+                            print(f"   ⚠️  IMPOSSIBILITY DETECTED: {impossibility_msg}")
+                        else:
+                            prefs["adventure_sports"] = extracted["adventure_sports"]
+                            extracted_info = True
+                            print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (validated against user input)")
                 elif mentions_adventure:
-                    # User mentioned adventure keywords - accept extraction
-                    prefs["adventure_sports"] = extracted["adventure_sports"]
-                    print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (user mentioned adventure keywords)")
+                    # User mentioned adventure keywords - validate for impossibilities
+                    dest = trip.get("destination", "").lower()
+                    is_impossible = False
+                    impossibility_msg = ""
+                    
+                    # Check for diving in landlocked countries
+                    landlocked = ["nepal", "switzerland", "austria", "bolivia", "mongolia", "laos", "tibet",
+                                 "afghanistan", "bhutan", "czech", "hungary", "slovakia", "zambia", "zimbabwe"]
+                    water_sports = ["scuba", "diving", "snorkel", "surf", "jet ski", "parasailing"]
+                    
+                    if any(country in dest for country in landlocked) and any(sport in user_input_lower for sport in water_sports):
+                        is_impossible = True
+                        impossibility_msg = f"I noticed you mentioned water/diving activities, but {trip.get('destination', 'your destination')} is a landlocked country without ocean access. Did you mean a different activity like trekking or hiking? I've set adventure sports to 'no' for now."
+                    
+                    # Check for snow sports in tropical countries
+                    tropical = ["thailand", "phuket", "bali", "philippines", "singapore", "indonesia", "malaysia", 
+                               "vietnam", "cambodia", "myanmar", "fiji", "maldives", "sri lanka", "india", "goa"]
+                    snow_sports = ["skiing", "snowboard", "snow", "ski"]
+                    
+                    if any(country in dest for country in tropical) and any(sport in user_input_lower for sport in snow_sports):
+                        is_impossible = True
+                        impossibility_msg = f"I noticed you mentioned skiing/snow sports, but {trip.get('destination', 'your destination')} is a tropical destination without snow. Did you mean water skiing or another activity? I've set adventure sports to 'no' for now."
+                    
+                    if is_impossible:
+                        prefs["adventure_sports"] = False
+                        state["_impossibility_detected"] = impossibility_msg
+                        print(f"   ⚠️  IMPOSSIBILITY DETECTED: {impossibility_msg}")
+                    else:
+                        prefs["adventure_sports"] = extracted["adventure_sports"]
+                        print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (user mentioned adventure keywords)")
                 else:
                     print(f"   ⏭️  Ignoring premature adventure_sports extraction: {extracted['adventure_sports']} (not asking question, no adventure keywords)")
             
@@ -764,6 +1003,16 @@ def create_conversation_graph(db) -> StateGraph:
             if extracted_info and current_q:
                 print(f"   ✅ Received answer for: {current_q}")
                 state["current_question"] = ""
+                # Clear failed attempts counter
+                state[f"{current_q}_failed_attempts"] = 0
+            elif current_q and not extracted_info and user_input.strip():
+                # User responded with non-empty message but we couldn't extract - track failed attempts
+                # Only increment if user actually said something (not empty/greeting)
+                if len(user_input.strip()) > 2:  # More than just "hi" or "ok"
+                    failed_key = f"{current_q}_failed_attempts"
+                    failed_count = state.get(failed_key, 0) + 1
+                    state[failed_key] = failed_count
+                    print(f"   ⚠️  Failed to extract {current_q} from '{user_input[:50]}...' (attempt {failed_count})")
             
             # Special handling for adventure_sports when user says yes/no but:
             # 1. LLM doesn't extract adventure_sports, OR
@@ -1140,17 +1389,35 @@ def create_conversation_graph(db) -> StateGraph:
                     state["current_question"] = "destination"
                     print(f"   ⚠️  Unrecognized missing items: {missing}, asking for destination as fallback")
                 
-                # Generate the question using LLM
-                generated_question = question_generator.generate_question(
-                    field=field_to_ask,
-                    collected_info=collected,
-                    conversation_history=state["messages"],
-                    llm_client=llm_client,
-                    use_llm=settings.use_llm_questions
-                )
+                # Check if we've failed to extract this field before
+                failed_attempts = state.get(f"{field_to_ask}_failed_attempts", 0)
                 
-                # Prepend acknowledgment if we just came from confirmation
-                response = f"{acknowledgment}{generated_question}" if acknowledgment else generated_question
+                if failed_attempts >= 1:
+                    # After 1 failed attempt, give gentle rephrasing request without format demands
+                    print(f"   ⚠️  Previous failed attempt ({failed_attempts}) for {field_to_ask} - asking for rephrasing")
+                    if field_to_ask == "departure_date":
+                        response = "I didn't quite understand that date. Could you try rephrasing it?"
+                    elif field_to_ask == "return_date":
+                        response = "I didn't understand that return date. Could you try rephrasing it?"
+                    elif field_to_ask == "travelers":
+                        response = "I need the specific ages of all travelers. For example: '2 travelers, ages 30 and 8' or '1 traveler, age 25'"
+                    else:
+                        response = f"I'm having trouble understanding that. Could you rephrase your {field_to_ask}?"
+                    # Reset counter to avoid infinite explicit messages
+                    state[f"{field_to_ask}_failed_attempts"] = 0
+                else:
+                    # Generate the question using LLM
+                    generated_question = question_generator.generate_question(
+                        field=field_to_ask,
+                        collected_info=collected,
+                        conversation_history=state["messages"],
+                        llm_client=llm_client,
+                        use_llm=settings.use_llm_questions
+                    )
+                    
+                    # Prepend acknowledgment if we just came from confirmation
+                    response = f"{acknowledgment}{generated_question}" if acknowledgment else generated_question
+                
                 print(f"   💬 Asking: {response[:80]}...")
             # NOTE: This elif branch is REMOVED - confirmation card logic moved to line 962
             # This prevents duplicate/conflicting confirmation card generation
@@ -1158,6 +1425,13 @@ def create_conversation_graph(db) -> StateGraph:
                 # Shouldn't reach here, but handle gracefully
                 response = "I have all the information I need. Let me calculate your quote..."
                 state["confirmation_received"] = True
+            
+            # Check if there's an impossibility message to show to the user
+            if state.get("_impossibility_detected"):
+                impossibility_msg = state["_impossibility_detected"]
+                response = f"{impossibility_msg}\n\n{response}"
+                state["_impossibility_detected"] = None  # Clear after showing
+                print(f"   💬 Prepending impossibility message to response")
             
             state["messages"].append(AIMessage(content=response))
             return state
@@ -1587,10 +1861,6 @@ def create_conversation_graph(db) -> StateGraph:
             
             response_parts.append("All prices are in Singapore Dollars (SGD).")
             response_parts.append("\nWould you like more details about any plan?")
-            
-            # Add note if using fallback pricing
-            if quote_result.get("fallback"):
-                response_parts.append("\nNote: Quote calculated using estimated pricing. Our pricing service is temporarily unavailable, but these estimates should give you a good idea of costs.")
             
             # Add risk narrative if available
             if state.get("risk_narrative"):
