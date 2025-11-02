@@ -451,8 +451,8 @@ export default function QuotePage() {
       emoji: string
     }> = []
 
-    // Match plan patterns - more flexible pattern to catch emojis
-    const planPattern = /([\u{1F300}-\u{1F9FF}])\s?\*\*([^:]+):\s*\$\s*([0-9,]+\.?\d*)\s*SGD\*\*([\s\S]*?)(?=\n\n[\u{1F300}-\u{1F9FF}]\s?\*\*|\n\n[A-Z💡📊]|\n\nAll prices|$)/gu
+    // Match plan patterns - more flexible pattern to catch emojis (including white star ⭐)
+    const planPattern = /([⭐🌟👑])\s?\*\*([^:]+):\s*\$([0-9,]+\.?\d*)\s*SGD\*\*([\s\S]*?)(?=\n\n[⭐🌟👑]\s?\*\*|\n\n[A-Z💡📊]|\n\nAll prices|$)/gu
     
     let match
     let matchCount = 0
@@ -1138,7 +1138,7 @@ export default function QuotePage() {
                                   </div>
                                 )}
                                 {plans.length > 0 && (
-                                  <div className={`grid grid-cols-1 ${plans.length === 2 ? 'md:grid-cols-2' : 'md:grid-cols-3'} gap-3 mb-4`}>
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                                     {plans.map((plan, index) => (
                                       <Card key={index} className="border border-gray-200 hover:border-gray-300 transition-colors">
                                         <CardHeader className="pb-3">

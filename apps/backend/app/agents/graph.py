@@ -1696,8 +1696,12 @@ def create_conversation_graph(db) -> StateGraph:
                 elif "standard" in user_input_lower or "basic" in user_input_lower:
                     tier = "standard"
                 else:
-                    # Default to elite if user said "buy", "purchase", etc. without specifying
-                    tier = "elite"  # Default to recommended tier
+                    # Default to recommended tier: use claims insights if available, otherwise quote_data
+                    claims_insights = state.get("claims_insights")
+                    if claims_insights and claims_insights.get("tier_recommendation"):
+                        tier = claims_insights["tier_recommendation"]["recommended_tier"]
+                    else:
+                        tier = quote_data.get("recommended_tier", "standard")
                 
                 quotes_dict = quote_data.get("quotes", {})
                 if tier not in quotes_dict:
