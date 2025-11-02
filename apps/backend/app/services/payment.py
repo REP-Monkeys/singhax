@@ -125,8 +125,10 @@ class PaymentService:
         
         if chat_session_id:
             # Append chat session ID to both URLs
-            success_url += f"&session={chat_session_id}"
-            cancel_url += f"&session={chat_session_id}"
+            separator = "&" if "?" in success_url else "?"
+            success_url += f"{separator}session={chat_session_id}"
+            separator = "&" if "?" in cancel_url else "?"
+            cancel_url += f"{separator}session={chat_session_id}"
         
         # Create checkout session (following reference pattern)
         try:

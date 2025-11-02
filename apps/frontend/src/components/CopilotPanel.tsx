@@ -180,12 +180,17 @@ export function CopilotPanel({ conversationState, sessionId, onPaymentStarted }:
         }
       }
       
-      setIsProcessingPayment(false)
+      // Refresh the original tab when payment is brought up (after opening checkout)
+      setTimeout(() => {
+        window.location.reload()
+      }, 500)
       
       // Trigger payment polling
       if (onPaymentStarted) {
         onPaymentStarted()
       }
+      
+      setIsProcessingPayment(false)
 
     } catch (error: any) {
       console.error('❌ Payment error:', error)

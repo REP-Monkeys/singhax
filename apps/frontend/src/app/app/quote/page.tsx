@@ -380,45 +380,19 @@ export default function QuotePage() {
     scrollToBottom()
   }, [messages])
 
-  // Handle payment redirect from Stripe
+  // Handle window focus refresh - refreshes when user returns from payment tab
   useEffect(() => {
-    const paymentStatus = searchParams.get('payment')
-    const sessionId = searchParams.get('session')
-    
-    if (paymentStatus && sessionId) {
-      // Clean URL - remove payment status but keep session
-      router.replace(`/app/quote?session=${sessionId}`, { scroll: false })
-      
-      if (paymentStatus === 'success') {
-        // Payment successful - show feedback and start polling
-        setAwaitingPayment(true)
-        
-        const successMsg: Message = {
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: '✅ Payment completed successfully! Processing your policy confirmation...',
-          timestamp: new Date()
-        }
-        setMessages(prev => [...prev, successMsg])
-        
-        // Reload chat history to get updated state (after webhook processing)
-        setTimeout(() => {
-          if (sessionId) {
-            loadChatHistory(sessionId)
-          }
-        }, 2000)
-      } else if (paymentStatus === 'canceled') {
-        // Payment canceled
-        const cancelMsg: Message = {
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: '❌ Payment was canceled. No charges were made. You can try again when ready!',
-          timestamp: new Date()
-        }
-        setMessages(prev => [...prev, cancelMsg])
+    const handleFocus = () => {
+      console.log('👁️ Window gained focus - checking if refresh needed...')
+      if (currentSessionId) {
+        // Reload chat history to get updated state
+        loadChatHistory(currentSessionId)
       }
     }
-  }, [searchParams, router])
+
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [currentSessionId])
 
   // Poll for payment completion and auto-refresh chat
   usePaymentPolling({
@@ -741,6 +715,11 @@ export default function QuotePage() {
         setCurrentSessionId(sessionId)
         // Update URL with session ID so it persists on refresh
         router.replace(`/app/quote?session=${sessionId}`, { scroll: false })
+      }
+
+      // Ensure sessionId exists before proceeding
+      if (!sessionId) {
+        throw new Error('No session ID available')
       }
 
       // Create form data
