@@ -557,25 +557,26 @@ def create_conversation_graph(db) -> StateGraph:
                     # Jump to end of extraction logic
                     print(f"   ⏭️  Skipping extraction - user confirmed existing value after explicit confirmation question")
             
-            # FALLBACK: If LLM didn't extract destination but we're asking for it, check for common country keywords
-            if not extracted_info and current_q == "destination" and "destination" not in extracted:
+            # FALLBACK: If LLM didn't extract destination, check for common country keywords
+            # This should run even on first message (when current_q is not set yet)
+            if "destination" not in extracted and not trip.get("destination"):
                 user_lower = user_input.lower()
                 # Common destination keywords (case-insensitive)
                 destination_keywords = {
-                    "thailand": "Thailand", "thai": "Thailand", "phuket": "Thailand", "bangkok": "Thailand",
-                    "japan": "Japan", "tokyo": "Japan", "osaka": "Japan", "kyoto": "Japan",
+                    "thailand": "Thailand", "thai": "Thailand", "phuket": "Thailand", "bangkok": "Bangkok, Thailand",
+                    "japan": "Japan", "tokyo": "Tokyo, Japan", "osaka": "Osaka, Japan", "kyoto": "Kyoto, Japan",
                     "singapore": "Singapore", "sg": "Singapore",
-                    "malaysia": "Malaysia", "kl": "Malaysia", "kuala lumpur": "Malaysia", "penang": "Malaysia",
-                    "indonesia": "Indonesia", "bali": "Indonesia", "jakarta": "Indonesia",
-                    "vietnam": "Vietnam", "hanoi": "Vietnam", "saigon": "Vietnam", "ho chi minh": "Vietnam",
-                    "philippines": "Philippines", "manila": "Philippines", "cebu": "Philippines",
-                    "south korea": "South Korea", "korea": "South Korea", "seoul": "South Korea", "busan": "South Korea",
-                    "nepal": "Nepal", "kathmandu": "Nepal", "napl": "Nepal",  # Include common typo
-                    "india": "India", "delhi": "India", "mumbai": "India", "goa": "India",
-                    "australia": "Australia", "sydney": "Australia", "melbourne": "Australia",
-                    "new zealand": "New Zealand", "auckland": "New Zealand",
-                    "china": "China", "beijing": "China", "shanghai": "China",
-                    "taiwan": "Taiwan", "taipei": "Taiwan",
+                    "malaysia": "Malaysia", "kl": "Kuala Lumpur, Malaysia", "kuala lumpur": "Kuala Lumpur, Malaysia", "penang": "Penang, Malaysia",
+                    "indonesia": "Indonesia", "bali": "Bali, Indonesia", "jakarta": "Jakarta, Indonesia",
+                    "vietnam": "Vietnam", "hanoi": "Hanoi, Vietnam", "saigon": "Ho Chi Minh City, Vietnam", "ho chi minh": "Ho Chi Minh City, Vietnam",
+                    "philippines": "Philippines", "manila": "Manila, Philippines", "cebu": "Cebu, Philippines",
+                    "south korea": "South Korea", "korea": "South Korea", "seoul": "Seoul, South Korea", "busan": "Busan, South Korea",
+                    "nepal": "Nepal", "kathmandu": "Kathmandu, Nepal", "napl": "Nepal",  # Include common typo
+                    "india": "India", "delhi": "Delhi, India", "mumbai": "Mumbai, India", "goa": "Goa, India",
+                    "australia": "Australia", "sydney": "Sydney, Australia", "melbourne": "Melbourne, Australia",
+                    "new zealand": "New Zealand", "auckland": "Auckland, New Zealand",
+                    "china": "China", "beijing": "Beijing, China", "shanghai": "Shanghai, China",
+                    "taiwan": "Taiwan", "taipei": "Taipei, Taiwan",
                     "hongkong": "Hong Kong", "hong kong": "Hong Kong", "hk": "Hong Kong"
                 }
                 
@@ -587,6 +588,7 @@ def create_conversation_graph(db) -> StateGraph:
             
             # FALLBACK: Always validate departure_date with dateutil
             if not extracted_info and current_q == "departure_date":
+                import re
                 from datetime import timedelta
                 from dateutil import parser as dateutil_parser
                 today = date.today()
@@ -608,29 +610,33 @@ def create_conversation_graph(db) -> StateGraph:
                 if not validated_date:
                     user_lower = user_input.lower()
                     
-                    # First check common relative date keywords
-                    if any(word in user_lower for word in ["tomorrow", "tommorow", "tommorrow", "tomorow", "tmrw"]):
-                        validated_date = today + timedelta(days=1)
-                        print(f"   🔧 Fallback: Extracted 'tomorrow' as departure_date: {validated_date.isoformat()}")
-                    elif "next week" in user_lower:
-                        validated_date = today + timedelta(days=7)
-                        print(f"   🔧 Fallback: Extracted 'next week' as departure_date: {validated_date.isoformat()}")
-                    elif "next month" in user_lower:
-                        validated_date = today + timedelta(days=30)
-                        print(f"   🔧 Fallback: Extracted 'next month' as departure_date: {validated_date.isoformat()}")
-                    else:
-                        # Try parsing natural dates like "november 11", "11 nov", "jan 15", "nov 5"
-                        try:
-                            parsed = dateutil_parser.parse(user_input, fuzzy=True, default=datetime(today.year, today.month, today.day))
-                            validated_date = parsed.date()
+                    # Check if user provided a date range (both dates at once)
+                    # Simple detection: contains "to", "-", "until", etc.
+                    if any(sep in user_lower for sep in [' to ', ' - ', ' until ', ' till ', ' through ']):
+                        # Split on common separators
+                        parts = re.split(r'\s+(?:to|-|until|till|through)\s+', user_input, maxsplit=1, flags=re.IGNORECASE)
+                        
+                        if len(parts) == 2:
+                            # Try to parse both dates using parse_date_safe
+                            dep_date = parse_date_safe(parts[0].strip(), prefer_future=True)
+                            ret_date = parse_date_safe(parts[1].strip(), prefer_future=True, reference_date=dep_date)
                             
-                            # If parsed date is in the past, assume next year
-                            if validated_date < today:
-                                validated_date = validated_date.replace(year=today.year + 1)
-                            
+                            # Validate both dates were parsed and return > departure
+                            if dep_date and ret_date and ret_date > dep_date:
+                                validated_date = dep_date
+                                extracted["return_date"] = ret_date.isoformat()
+                                print(f"   🔧 Fallback: Extracted date range as {dep_date.isoformat()} to {ret_date.isoformat()}")
+                            else:
+                                print(f"   ⚠️  Invalid date range - could not parse or return not after departure")
+                    
+                    # If not a range or range parsing failed, try standard date parsing
+                    if not validated_date:
+                        # Use parse_date_safe for all date parsing
+                        validated_date = parse_date_safe(user_input, prefer_future=True)
+                        if validated_date:
                             print(f"   🔧 Fallback: Parsed '{user_input}' to '{validated_date.isoformat()}'")
-                        except Exception as e:
-                            print(f"   ⚠️  Failed to parse departure_date from user_input: {e}")
+                        else:
+                            print(f"   ⚠️  Failed to parse departure_date from user_input: {user_input}")
                 
                 # Only set if we got a valid date
                 if validated_date:
@@ -670,24 +676,12 @@ def create_conversation_graph(db) -> StateGraph:
                 
                 # If LLM validation failed, parse raw user input
                 if not validated_date:
-                    try:
-                        parsed = dateutil_parser.parse(user_input, fuzzy=True, default=datetime(today.year, today.month, today.day))
-                        validated_date = parsed.date()
-                        
-                        # If parsed date is in the past, assume next year
-                        if validated_date < today:
-                            validated_date = validated_date.replace(year=today.year + 1)
-                        
-                        # If we have a departure date and return is before it, try next year
-                        if departure:
-                            if isinstance(departure, str):
-                                departure = parse_date_safe(departure)
-                            if validated_date <= departure:
-                                validated_date = validated_date.replace(year=validated_date.year + 1)
-                        
+                    # Use parse_date_safe with departure date as reference
+                    validated_date = parse_date_safe(user_input, prefer_future=True, reference_date=departure)
+                    if validated_date:
                         print(f"   🔧 Fallback: Parsed '{user_input}' as return_date to '{validated_date.isoformat()}'")
-                    except Exception as e:
-                        print(f"   ⚠️  Failed to parse return_date from user_input: {e}")
+                    else:
+                        print(f"   ⚠️  Failed to parse return_date from user_input: {user_input}")
                 
                 # Only set if we got a valid date
                 if validated_date:
@@ -695,10 +689,11 @@ def create_conversation_graph(db) -> StateGraph:
                 else:
                     extracted.pop("return_date", None)  # Remove invalid extraction
             
-            if not extracted_info and "destination" in extracted:
+            if "destination" in extracted and not trip.get("destination"):
                 trip["destination"] = extracted["destination"]
                 print(f"   ✅ Extracted destination: {extracted['destination']}")
-                if current_q == "destination":
+                # Mark as extracted even if current_q is not set (first message case)
+                if current_q == "destination" or not current_q:
                     extracted_info = True
                 
                 # Automatically derive arrival_country from destination
@@ -776,7 +771,8 @@ def create_conversation_graph(db) -> StateGraph:
                     
                     if parsed_date:
                         trip["departure_date"] = parsed_date
-                        if current_q == "departure_date":
+                        # Mark as extracted if we were asking for it, OR if this is the first message with both dates
+                        if current_q == "departure_date" or (not current_q and "return_date" in extracted):
                             extracted_info = True
 
                         # Update trip with start date
@@ -815,7 +811,8 @@ def create_conversation_graph(db) -> StateGraph:
                     
                     if parsed_date:
                         trip["return_date"] = parsed_date
-                        if current_q == "return_date":
+                        # Mark as extracted if we were asking for it, OR if provided with departure_date
+                        if current_q == "return_date" or (current_q == "departure_date" and "return_date" in extracted):
                             extracted_info = True
 
                         # Update trip with end date
@@ -922,7 +919,10 @@ def create_conversation_graph(db) -> StateGraph:
                             extracted_info = True
                             print(f"   ✅ LLM extracted None, but user said no - set to False")
                         else:
-                            print(f"   ⚠️  LLM extracted None and no clear yes/no detected - will re-ask")
+                            # Ambiguous response - default to False to unblock the flow
+                            print(f"   ⚠️  LLM extracted None and no clear yes/no detected - defaulting to False")
+                            prefs["adventure_sports"] = False
+                            extracted_info = True
                     # If user clearly said yes/no, validate extraction
                     elif said_yes and extracted["adventure_sports"] == False:
                         print(f"   ⚠️  LLM extracted False but user said yes - correcting to True")
@@ -933,7 +933,47 @@ def create_conversation_graph(db) -> StateGraph:
                         prefs["adventure_sports"] = False
                         extracted_info = True
                     else:
-                        # Extraction matches user intent, but validate for impossibilities
+                        # Only validate for impossibilities if user said YES to adventure sports
+                        if extracted["adventure_sports"] == True:
+                            dest = trip.get("destination", "").lower()
+                            is_impossible = False
+                            impossibility_msg = ""
+                            
+                            # Check for diving in landlocked countries
+                            landlocked = ["nepal", "switzerland", "austria", "bolivia", "mongolia", "laos", "tibet",
+                                         "afghanistan", "bhutan", "czech", "hungary", "slovakia", "zambia", "zimbabwe"]
+                            water_sports = ["scuba", "diving", "snorkel", "surf", "jet ski", "parasailing"]
+                            
+                            if any(country in dest for country in landlocked) and any(sport in user_input_lower for sport in water_sports):
+                                is_impossible = True
+                                impossibility_msg = f"I noticed you mentioned water/diving activities, but {trip.get('destination', 'your destination')} is a landlocked country without ocean access. Did you mean a different activity like trekking or hiking? I've set adventure sports to 'no' for now."
+                            
+                            # Check for snow sports in tropical countries
+                            tropical = ["thailand", "phuket", "bali", "philippines", "singapore", "indonesia", "malaysia", 
+                                       "vietnam", "cambodia", "myanmar", "fiji", "maldives", "sri lanka", "india", "goa"]
+                            snow_sports = ["skiing", "snowboard", "snow", "ski"]
+                            
+                            if any(country in dest for country in tropical) and any(sport in user_input_lower for sport in snow_sports):
+                                is_impossible = True
+                                impossibility_msg = f"I noticed you mentioned skiing/snow sports, but {trip.get('destination', 'your destination')} is a tropical destination without snow. Did you mean water skiing or another activity? I've set adventure sports to 'no' for now."
+                            
+                            if is_impossible:
+                                prefs["adventure_sports"] = False
+                                extracted_info = True
+                                state["_impossibility_detected"] = impossibility_msg
+                                print(f"   ⚠️  IMPOSSIBILITY DETECTED: {impossibility_msg}")
+                            else:
+                                prefs["adventure_sports"] = True
+                                extracted_info = True
+                                print(f"   ✅ User confirmed YES to adventure_sports (validated)")
+                        else:
+                            # User said NO - just accept it without checking impossibilities
+                            prefs["adventure_sports"] = False
+                            extracted_info = True
+                            print(f"   ✅ User said NO to adventure_sports")
+                elif mentions_adventure:
+                    # User mentioned adventure keywords - only check impossibilities if LLM extracted True
+                    if extracted["adventure_sports"] == True:
                         dest = trip.get("destination", "").lower()
                         is_impossible = False
                         impossibility_msg = ""
@@ -958,44 +998,15 @@ def create_conversation_graph(db) -> StateGraph:
                         
                         if is_impossible:
                             prefs["adventure_sports"] = False
-                            extracted_info = True
                             state["_impossibility_detected"] = impossibility_msg
                             print(f"   ⚠️  IMPOSSIBILITY DETECTED: {impossibility_msg}")
                         else:
                             prefs["adventure_sports"] = extracted["adventure_sports"]
-                            extracted_info = True
-                            print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (validated against user input)")
-                elif mentions_adventure:
-                    # User mentioned adventure keywords - validate for impossibilities
-                    dest = trip.get("destination", "").lower()
-                    is_impossible = False
-                    impossibility_msg = ""
-                    
-                    # Check for diving in landlocked countries
-                    landlocked = ["nepal", "switzerland", "austria", "bolivia", "mongolia", "laos", "tibet",
-                                 "afghanistan", "bhutan", "czech", "hungary", "slovakia", "zambia", "zimbabwe"]
-                    water_sports = ["scuba", "diving", "snorkel", "surf", "jet ski", "parasailing"]
-                    
-                    if any(country in dest for country in landlocked) and any(sport in user_input_lower for sport in water_sports):
-                        is_impossible = True
-                        impossibility_msg = f"I noticed you mentioned water/diving activities, but {trip.get('destination', 'your destination')} is a landlocked country without ocean access. Did you mean a different activity like trekking or hiking? I've set adventure sports to 'no' for now."
-                    
-                    # Check for snow sports in tropical countries
-                    tropical = ["thailand", "phuket", "bali", "philippines", "singapore", "indonesia", "malaysia", 
-                               "vietnam", "cambodia", "myanmar", "fiji", "maldives", "sri lanka", "india", "goa"]
-                    snow_sports = ["skiing", "snowboard", "snow", "ski"]
-                    
-                    if any(country in dest for country in tropical) and any(sport in user_input_lower for sport in snow_sports):
-                        is_impossible = True
-                        impossibility_msg = f"I noticed you mentioned skiing/snow sports, but {trip.get('destination', 'your destination')} is a tropical destination without snow. Did you mean water skiing or another activity? I've set adventure sports to 'no' for now."
-                    
-                    if is_impossible:
-                        prefs["adventure_sports"] = False
-                        state["_impossibility_detected"] = impossibility_msg
-                        print(f"   ⚠️  IMPOSSIBILITY DETECTED: {impossibility_msg}")
+                            print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (user mentioned adventure keywords, validated)")
                     else:
-                        prefs["adventure_sports"] = extracted["adventure_sports"]
-                        print(f"   ✅ Accepted adventure_sports extraction: {extracted['adventure_sports']} (user mentioned adventure keywords)")
+                        # User mentioned adventure keywords but said no or ambiguous - trust the extraction
+                        prefs["adventure_sports"] = extracted["adventure_sports"] if extracted["adventure_sports"] is not None else False
+                        print(f"   ✅ Accepted adventure_sports extraction: {prefs['adventure_sports']} (user mentioned adventure keywords)")
                 else:
                     print(f"   ⏭️  Ignoring premature adventure_sports extraction: {extracted['adventure_sports']} (not asking question, no adventure keywords)")
             
@@ -1036,10 +1047,40 @@ def create_conversation_graph(db) -> StateGraph:
                     state["current_question"] = ""
                     print(f"   ✅ Parsed 'no' for adventure_sports")
                 elif any(pos_word in user_input_lower for pos_word in pos_words):
-                    prefs["adventure_sports"] = True
-                    extracted_info = True
-                    state["current_question"] = ""
-                    print(f"   ✅ Parsed 'yes' for adventure_sports (matched: {[w for w in pos_words if w in user_input_lower][:1]})")
+                    # User said yes - but check for impossibilities first!
+                    dest = trip.get("destination", "").lower()
+                    is_impossible = False
+                    impossibility_msg = ""
+                    
+                    # Check for diving in landlocked countries
+                    landlocked = ["nepal", "switzerland", "austria", "bolivia", "mongolia", "laos", "tibet",
+                                 "afghanistan", "bhutan", "czech", "hungary", "slovakia", "zambia", "zimbabwe"]
+                    water_sports = ["scuba", "diving", "snorkel", "surf", "jet ski", "parasailing"]
+                    
+                    if any(country in dest for country in landlocked) and any(sport in user_input_lower for sport in water_sports):
+                        is_impossible = True
+                        impossibility_msg = f"I noticed you mentioned water/diving activities, but {trip.get('destination', 'your destination')} is a landlocked country without ocean access. Did you mean a different activity like trekking or hiking? I've set adventure sports to 'no' for now."
+                    
+                    # Check for snow sports in tropical countries
+                    tropical = ["thailand", "phuket", "bali", "philippines", "singapore", "indonesia", "malaysia", 
+                               "vietnam", "cambodia", "myanmar", "fiji", "maldives", "sri lanka", "india", "goa"]
+                    snow_sports = ["skiing", "snowboard", "snow", "ski"]
+                    
+                    if any(country in dest for country in tropical) and any(sport in user_input_lower for sport in snow_sports):
+                        is_impossible = True
+                        impossibility_msg = f"I noticed you mentioned skiing/snow sports, but {trip.get('destination', 'your destination')} is a tropical destination without snow. Did you mean water skiing or another activity? I've set adventure sports to 'no' for now."
+                    
+                    if is_impossible:
+                        prefs["adventure_sports"] = False
+                        extracted_info = True
+                        state["current_question"] = ""
+                        state["_impossibility_detected"] = impossibility_msg
+                        print(f"   ⚠️  IMPOSSIBILITY DETECTED in fallback: {impossibility_msg}")
+                    else:
+                        prefs["adventure_sports"] = True
+                        extracted_info = True
+                        state["current_question"] = ""
+                        print(f"   ✅ Parsed 'yes' for adventure_sports (matched: {[w for w in pos_words if w in user_input_lower][:1]})")
             
             # Fallback: Simple keyword extraction if LLM didn't extract anything
             # TEMPORARILY COMMENTED OUT FOR TESTING
@@ -1213,6 +1254,16 @@ def create_conversation_graph(db) -> StateGraph:
                     print(f"   🔍 all_required_present (after normalization): {all_required_present}")
                     
                     if all_required_present:
+                        # CRITICAL: Check if impossibility was detected - show warning FIRST
+                        if state.get("_impossibility_detected"):
+                            impossibility_msg = state["_impossibility_detected"]
+                            state["_impossibility_detected"] = None  # Clear after showing
+                            print(f"   💬 Showing impossibility message before continuing")
+                            state["messages"].append(AIMessage(content=impossibility_msg))
+                            # Continue flow - adventure_sports has been set to False already
+                            # Will ask for confirmation on next turn
+                            return state
+                        
                         # Check if adventure_sports still needs to be asked
                         if prefs.get("adventure_sports") is None:
                             print(f"   🔍 All required fields present, but adventure_sports not answered yet")
