@@ -74,10 +74,13 @@ export default function DashboardPage() {
       .replace(/,/g, '_')
   }
 
-  const getPublicImageUrl = (destination: string): string | null => {
+  const getPublicImageUrl = (destination: string): string[] => {
     const sanitized = sanitizeDestinationName(destination)
-    // Check if image exists in public directory
-    return `/destination-images/${sanitized}.png`
+    // Check both .jpg and .png formats
+    return [
+      `/destination-images/${sanitized}.jpg`,
+      `/destination-images/${sanitized}.png`
+    ]
   }
 
   const checkImageExists = async (url: string): Promise<boolean> => {
@@ -111,11 +114,12 @@ export default function DashboardPage() {
     // Only check public directory for pre-generated images (no API calls)
     const publicImageChecks = await Promise.all(
       destinationsToFetch.map(async (destination) => {
-        const publicUrl = getPublicImageUrl(destination)
-        if (publicUrl) {
-          const exists = await checkImageExists(publicUrl)
+        const publicUrls = getPublicImageUrl(destination)
+        // Try both .jpg and .png formats
+        for (const url of publicUrls) {
+          const exists = await checkImageExists(url)
           if (exists) {
-            return { destination, imageUrl: publicUrl }
+            return { destination, imageUrl: url }
           }
         }
         return null
@@ -400,20 +404,53 @@ export default function DashboardPage() {
                 >
                   {/* Trip Image */}
                   <div className="aspect-[4/3] relative overflow-hidden" style={{ backgroundImage: 'linear-gradient(to top, #ff0844 0%, #ffb199 100%)' }}>
-                    {trip.destinations.length > 0 && getDestinationImageUrl(trip.destinations[0]) ? (
+                    {trip.destinations.length >= 2 && getDestinationImageUrl(trip.destinations[0]) && getDestinationImageUrl(trip.destinations[1]) ? (
+                      // Multi-destination: Show diagonal split with 2 images
+                      <>
+                        {/* First destination - top-left triangle */}
+                        <div className="absolute inset-0" style={{ clipPath: 'polygon(0 0, 100% 0, 0 100%)' }}>
+                          <img
+                            src={getDestinationImageUrl(trip.destinations[0])!}
+                            alt={trip.destinations[0]}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement
+                              target.style.display = 'none'
+                            }}
+                          />
+                        </div>
+                        {/* Second destination - bottom-right triangle */}
+                        <div className="absolute inset-0" style={{ clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }}>
+                          <img
+                            src={getDestinationImageUrl(trip.destinations[1])!}
+                            alt={trip.destinations[1]}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement
+                              target.style.display = 'none'
+                            }}
+                          />
+                        </div>
+                        {/* Diagonal line separator */}
+                        <div 
+                          className="absolute inset-0 pointer-events-none"
+                          style={{
+                            background: 'linear-gradient(to bottom right, transparent calc(50% - 1px), white calc(50% - 1px), white calc(50% + 1px), transparent calc(50% + 1px))'
+                          }}
+                        />
+                      </>
+                    ) : trip.destinations.length > 0 && getDestinationImageUrl(trip.destinations[0]) ? (
+                      // Single destination: Show one image
                       <img
                         src={getDestinationImageUrl(trip.destinations[0])!}
                         alt={trip.destinations[0]}
                         className="w-full h-full object-cover"
                         onError={(e) => {
-                          // Fallback to gradient if image fails to load
                           const target = e.target as HTMLImageElement
                           target.style.display = 'none'
                         }}
                       />
                     ) : null}
-                    
-                    {/* Image loading states removed - cards will show empty state */}
                     
                     <div className="absolute top-3 right-3">
                       <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusBadge(trip.status)}`}>
@@ -428,7 +465,12 @@ export default function DashboardPage() {
                       {/* Destination Name */}
                       {trip.destinations.length > 0 && (
                         <h3 className="text-xl font-semibold text-black mb-2">
-                          {trip.destinations[0]}
+                          {trip.destinations.length === 1 
+                            ? trip.destinations[0]
+                            : trip.destinations.length === 2
+                            ? `${trip.destinations[0]} & ${trip.destinations[1]}`
+                            : `${trip.destinations[0]} & ${trip.destinations[1]} +${trip.destinations.length - 2} more`
+                          }
                         </h3>
                       )}
                       {/* Dates */}

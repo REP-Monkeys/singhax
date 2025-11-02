@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diagonal Split Image Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #dd2930;
+            margin-bottom: 30px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .card:hover {
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+            cursor: pointer;
+        }
+        .image-container {
+            position: relative;
+            aspect-ratio: 4/3;
+            overflow: hidden;
+            background: linear-gradient(to top, #ff0844 0%, #ffb199 100%);
+        }
+        .single-image {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        /* Multi-destination diagonal split */
+        .split-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        .split-image-1 {
+            position: absolute;
+            inset: 0;
+            clip-path: polygon(0 0, 100% 0, 0 100%);
+        }
+        .split-image-1 img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .split-image-2 {
+            position: absolute;
+            inset: 0;
+            clip-path: polygon(100% 0, 100% 100%, 0 100%);
+        }
+        .split-image-2 img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .diagonal-line {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: linear-gradient(to bottom right, 
+                transparent calc(50% - 1px), 
+                white calc(50% - 1px), 
+                white calc(50% + 1px), 
+                transparent calc(50% + 1px));
+        }
+        .card-content {
+            padding: 16px;
+        }
+        .card-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #000;
+            margin-bottom: 12px;
+        }
+        .card-info {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        .badge {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 Diagonal Split Image Preview</h1>
+        <p style="color: #666; margin-bottom: 30px;">
+            Multi-destination trips now show two images with a diagonal split!
+        </p>
+        
+        <div class="grid">
+            <!-- Single Destination Card -->
+            <div class="card">
+                <div class="image-container">
+                    <img src="/destination-images/japan.png" alt="Japan" class="single-image">
+                    <div class="badge">Upcoming</div>
+                </div>
+                <div class="card-content">
+                    <div class="card-title">Japan</div>
+                    <div class="card-info">📅 Dec 28, 2024 - Jan 8, 2025</div>
+                    <div class="card-info">👥 2 travelers</div>
+                </div>
+            </div>
+
+            <!-- Multi-Destination Card: Japan & South Korea -->
+            <div class="card">
+                <div class="image-container">
+                    <div class="split-container">
+                        <div class="split-image-1">
+                            <img src="/destination-images/japan.png" alt="Japan">
+                        </div>
+                        <div class="split-image-2">
+                            <img src="/destination-images/south_korea.png" alt="South Korea">
+                        </div>
+                        <div class="diagonal-line"></div>
+                    </div>
+                    <div class="badge">Draft</div>
+                </div>
+                <div class="card-content">
+                    <div class="card-title">Japan & South Korea</div>
+                    <div class="card-info">📅 Mar 15, 2025 - Mar 30, 2025</div>
+                    <div class="card-info">👥 4 travelers</div>
+                </div>
+            </div>
+
+            <!-- Multi-Destination Card: Thailand & Malaysia -->
+            <div class="card">
+                <div class="image-container">
+                    <div class="split-container">
+                        <div class="split-image-1">
+                            <img src="/destination-images/thailand.png" alt="Thailand">
+                        </div>
+                        <div class="split-image-2">
+                            <img src="/destination-images/malaysia.png" alt="Malaysia">
+                        </div>
+                        <div class="diagonal-line"></div>
+                    </div>
+                    <div class="badge">Ongoing</div>
+                </div>
+                <div class="card-content">
+                    <div class="card-title">Thailand & Malaysia</div>
+                    <div class="card-info">📅 Nov 1, 2024 - Nov 14, 2024</div>
+                    <div class="card-info">👥 2 travelers</div>
+                </div>
+            </div>
+
+            <!-- Multi-Destination Card: France & Italy -->
+            <div class="card">
+                <div class="image-container">
+                    <div class="split-container">
+                        <div class="split-image-1">
+                            <img src="/destination-images/france.png" alt="France">
+                        </div>
+                        <div class="split-image-2">
+                            <img src="/destination-images/italy.png" alt="Italy">
+                        </div>
+                        <div class="diagonal-line"></div>
+                    </div>
+                    <div class="badge">Completed</div>
+                </div>
+                <div class="card-content">
+                    <div class="card-title">France & Italy</div>
+                    <div class="card-info">📅 Jun 10, 2024 - Jun 24, 2024</div>
+                    <div class="card-info">👥 2 travelers</div>
+                </div>
+            </div>
+
+            <!-- Multi-Destination Card: Australia & New Zealand -->
+            <div class="card">
+                <div class="image-container">
+                    <div class="split-container">
+                        <div class="split-image-1">
+                            <img src="/destination-images/australia.png" alt="Australia">
+                        </div>
+                        <div class="split-image-2">
+                            <img src="/destination-images/new_zealand.png" alt="New Zealand">
+                        </div>
+                        <div class="diagonal-line"></div>
+                    </div>
+                    <div class="badge">Draft</div>
+                </div>
+                <div class="card-content">
+                    <div class="card-title">Australia & New Zealand</div>
+                    <div class="card-info">📅 Feb 1, 2025 - Feb 21, 2025</div>
+                    <div class="card-info">👥 3 travelers</div>
+                </div>
+            </div>
+
+            <!-- Multi-Destination Card: Hong Kong & Macau -->
+            <div class="card">
+                <div class="image-container">
+                    <div class="split-container">
+                        <div class="split-image-1">
+                            <img src="/destination-images/hong_kong.png" alt="Hong Kong">
+                        </div>
+                        <div class="split-image-2">
+                            <img src="/destination-images/macau.png" alt="Macau">
+                        </div>
+                        <div class="diagonal-line"></div>
+                    </div>
+                    <div class="badge">Upcoming</div>
+                </div>
+                <div class="card-content">
+                    <div class="card-title">Hong Kong & Macau</div>
+                    <div class="card-info">📅 Dec 15, 2024 - Dec 22, 2024</div>
+                    <div class="card-info">👥 2 travelers</div>
+                </div>
+            </div>
+        </div>
+
+        <div style="margin-top: 40px; padding: 20px; background: white; border-radius: 12px;">
+            <h2 style="color: #dd2930; margin-bottom: 16px;">✨ Features</h2>
+            <ul style="color: #666; line-height: 1.8;">
+                <li><strong>Single Destination:</strong> Shows one full image</li>
+                <li><strong>Multi-Destination (2+):</strong> Shows two images split diagonally with a white separator line</li>
+                <li><strong>Smart Titles:</strong> Displays "Destination A & Destination B" for 2 destinations</li>
+                <li><strong>Fallback:</strong> If images don't load, falls back to gradient background</li>
+                <li><strong>31 Destinations Covered:</strong> ASEAN, Asia-Pacific, and popular worldwide destinations</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
+
