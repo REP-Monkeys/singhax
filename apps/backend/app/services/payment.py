@@ -18,7 +18,8 @@ class PaymentService:
     
     def __init__(self):
         """Initialize payment service with Stripe API key."""
-        if settings.stripe_secret_key:
+        # Ensure Stripe API key is set (defensive - should be set at app startup)
+        if settings.stripe_secret_key and not stripe.api_key:
             stripe.api_key = settings.stripe_secret_key
     
     def create_payment_intent(
@@ -117,25 +118,30 @@ class PaymentService:
             raise ValueError("Stripe secret key not configured")
         
         # Create checkout session (following reference pattern)
-        checkout_session = stripe.checkout.Session.create(
-            payment_method_types=['card'],
-            line_items=[{
-                'price_data': {
-                    'currency': 'sgd',  # lowercase for Stripe
-                    'unit_amount': amount,  # in cents
-                    'product_data': {
-                        'name': product_name,
-                        'description': 'Travel Insurance Policy',
+        try:
+            checkout_session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=[{
+                    'price_data': {
+                        'currency': 'sgd',  # lowercase for Stripe
+                        'unit_amount': amount,  # in cents
+                        'product_data': {
+                            'name': product_name,
+                            'description': 'Travel Insurance Policy',
+                        },
                     },
-                },
-                'quantity': 1,
-            }],
-            mode='payment',
-            success_url=settings.payment_success_url,
-            cancel_url=settings.payment_cancel_url,
-            client_reference_id=payment_intent_id,  # CRITICAL: Links Stripe to our DB
-            customer_email=user_email,
-        )
+                    'quantity': 1,
+                }],
+                mode='payment',
+                success_url=settings.payment_success_url,
+                cancel_url=settings.payment_cancel_url,
+                client_reference_id=payment_intent_id,  # CRITICAL: Links Stripe to our DB
+                customer_email=user_email,
+                expires_at=int(time.time()) + 3600,  # Explicit 1 hour expiration
+            )
+        except stripe.error.StripeError as e:
+            print(f"❌ Stripe API error creating checkout session: {e}")
+            raise ValueError(f"Failed to create Stripe checkout: {str(e)}")
         
         # Update payment record with stripe_session_id
         payment = db.query(Payment).filter(

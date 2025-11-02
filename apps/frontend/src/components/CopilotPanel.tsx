@@ -161,9 +161,25 @@ export function CopilotPanel({ conversationState, sessionId, onPaymentStarted }:
 
       const data = await response.json()
 
-      // Open Stripe checkout in a new tab
-      console.log('💳 Opening Stripe checkout in new tab:', data.checkout_url)
-      window.open(data.checkout_url, '_blank', 'noopener,noreferrer')
+      // Open Stripe checkout - try new tab first, fallback to same tab
+      console.log('💳 Opening Stripe checkout:', data.checkout_url)
+      
+      // Try to open in new tab
+      const checkoutWindow = window.open(data.checkout_url, '_blank', 'noopener,noreferrer')
+      
+      // Check if popup was blocked
+      if (!checkoutWindow || checkoutWindow.closed || typeof checkoutWindow.closed === 'undefined') {
+        // Popup blocked - ask user to allow or redirect in same tab
+        const userChoice = confirm(
+          'Popup blocked! Click OK to open payment in this tab, or Cancel and allow popups to open in a new tab.'
+        )
+        if (userChoice) {
+          // Redirect in same tab
+          window.location.href = data.checkout_url
+          return // Don't set processing to false since we're navigating away
+        }
+      }
+      
       setIsProcessingPayment(false)
       
       // Trigger payment polling

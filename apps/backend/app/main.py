@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from pathlib import Path
+import stripe
 
 from app.core.config import settings
 from app.core.db import get_db, create_tables
@@ -77,6 +78,13 @@ async def startup_event():
     except Exception as e:
         print(f"⚠️  Database connection failed (will retry on first request): {str(e)[:100]}")
         print("   Server will continue - chat will work without persistence")
+    
+    # Initialize Stripe API key globally
+    if settings.stripe_secret_key:
+        stripe.api_key = settings.stripe_secret_key
+        print(f"✓ Stripe API initialized (key: {settings.stripe_secret_key[:7]}...)")
+    else:
+        print("⚠️  Stripe API key not configured - payment features will not work")
     
     # Debug: Print Supabase configuration status
     print(f"[CONFIG] Supabase URL configured: {settings.supabase_url is not None}")

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Plan Parsing</title>
+</head>
+<body>
+    <h1>Plan Parsing Test</h1>
+    <div id="output"></div>
+    
+    <script>
+        // Test with exact backend format
+        const testMessage = `Great! Here are your travel insurance options for France:
+
+🌟 **Standard Plan: $3000.50 SGD**
+   ✓ Medical coverage: $100,000
+   ✓ Trip cancellation: $20,000
+   ✓ Baggage protection: $3,000
+   ✓ Personal accident: $25,000
+
+⭐ **Elite Plan (Recommended for adventure sports): $10540.80 SGD**
+   ✓ Medical coverage: $100,000
+   ✓ Trip cancellation: $20,000
+   ✓ Baggage protection: $5,000
+   ✓ Personal accident: $50,000
+   ✓ Adventure sports coverage included
+
+👑 **Premier Plan: $15000.00 SGD**
+   ✓ Medical coverage: $100,000
+   ✓ Trip cancellation: $20,000
+   ✓ Baggage protection: $5,000
+   ✓ Personal accident: $50,000
+   ✓ Full adventure sports coverage
+   ✓ Emergency evacuation: $500,000
+
+All prices are in Singapore Dollars (SGD).
+
+Would you like more details about any plan?`;
+
+        console.log('Testing with message:', testMessage);
+        
+        // Test Standard
+        const standardMatch = testMessage.match(/🌟\s*\*\*(.+?):\s*\$?([\d,]+(?:\.\d{2})?)\s*SGD\*\*([\s\S]*?)(?=(?:⭐|👑|All prices|Would you like|$))/i);
+        console.log('Standard match:', standardMatch ? 'FOUND' : 'NOT FOUND');
+        if (standardMatch) {
+            console.log('  Name:', standardMatch[1]);
+            console.log('  Price:', standardMatch[2]);
+            console.log('  Coverage text length:', standardMatch[3].length);
+        }
+        
+        // Test Elite
+        let eliteMatch = testMessage.match(/⭐\s*\*\*(.+?):\s*\$?([\d,]+(?:\.\d{2})?)\s*SGD\*\*([\s\S]*?)(?=(?:👑|All prices|Would you like|$))/i);
+        console.log('Elite match:', eliteMatch ? 'FOUND' : 'NOT FOUND');
+        if (eliteMatch) {
+            console.log('  Name:', eliteMatch[1]);
+            console.log('  Price:', eliteMatch[2]);
+            console.log('  Coverage text length:', eliteMatch[3].length);
+        }
+        
+        // Test Premier
+        const premierMatch = testMessage.match(/👑\s*\*\*(.+?):\s*\$?([\d,]+(?:\.\d{2})?)\s*SGD\*\*([\s\S]*?)(?=(?:All prices|Would you like|$))/i);
+        console.log('Premier match:', premierMatch ? 'FOUND' : 'NOT FOUND');
+        if (premierMatch) {
+            console.log('  Name:', premierMatch[1]);
+            console.log('  Price:', premierMatch[2]);
+            console.log('  Coverage text length:', premierMatch[3].length);
+        }
+        
+        // Output results
+        const output = document.getElementById('output');
+        output.innerHTML = `
+            <h2>Results:</h2>
+            <p>Standard: ${standardMatch ? '✅ FOUND' : '❌ NOT FOUND'}</p>
+            <p>Elite: ${eliteMatch ? '✅ FOUND' : '❌ NOT FOUND'}</p>
+            <p>Premier: ${premierMatch ? '✅ FOUND' : '❌ NOT FOUND'}</p>
+            <pre>${JSON.stringify({ standardMatch: !!standardMatch, eliteMatch: !!eliteMatch, premierMatch: !!premierMatch }, null, 2)}</pre>
+        `;
+    </script>
+</body>
+</html>
+

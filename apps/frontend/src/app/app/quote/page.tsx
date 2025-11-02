@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,7 @@ import { CopilotPanel } from '@/components/CopilotPanel'
 import { VoiceButton } from '@/components/VoiceButton'
 import { ExtractedDataCard } from '@/components/ExtractedDataCard'
 import { FileAttachment } from '@/components/FileAttachment'
+import { PlanComparisonCard } from '@/components/PlanComparisonCard'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
@@ -81,8 +82,207 @@ function extractUrls(text: string): string[] {
   return text.match(urlPattern) || []
 }
 
-// Component to render message content with clickable URLs
+// Helper function to split text into paragraphs
+function splitIntoParagraphs(text: string): string[] {
+  // Don't split if it contains plan cards - these should be rendered as one complete message
+  const planEmojis = ['🌟', '⭐', '👑']
+  const hasPlanCards = planEmojis.some(emoji => text.includes(emoji))
+  if (hasPlanCards) {
+    return [text]
+  }
+  
+  // Split by double newlines first (standard paragraphs)
+  let paragraphs = text.split(/\n\n+/).filter(p => p.trim())
+  
+  // If no double newlines found, try single newlines
+  if (paragraphs.length === 1 && text.includes('\n')) {
+    paragraphs = text.split(/\n+/).filter(p => p.trim())
+  }
+  
+  // If still just one paragraph and it's very long (>300 chars), keep it as one
+  // This prevents splitting structured content like lists
+  if (paragraphs.length === 1 && text.length < 300) {
+    return paragraphs
+  }
+  
+  return paragraphs
+}
+
+// Helper function to parse markdown bold and convert to JSX
+function parseMarkdownBold(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = []
+  const boldPattern = /\*\*(.+?)\*\*/g
+  let lastIndex = 0
+  let match
+  
+  while ((match = boldPattern.exec(text)) !== null) {
+    // Add text before the bold part
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index))
+    }
+    // Add the bold part
+    parts.push(<strong key={match.index}>{match[1]}</strong>)
+    lastIndex = boldPattern.lastIndex
+  }
+  
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex))
+  }
+  
+  return parts.length > 0 ? parts : [text]
+}
+
+// Function to parse plan cards from text
+function parsePlanCards(text: string) {
+  const planEmojis = ['🌟', '⭐', '👑']
+  const hasPlanCards = planEmojis.some(emoji => text.includes(emoji))
+  
+  if (!hasPlanCards) return null
+  
+  console.log('🔍 Parsing plan cards from text:', text.substring(0, 500))
+  
+  const plans: any[] = []
+  
+  // Parse Standard Plan (🌟)
+  const standardMatch = text.match(/🌟\s*\*\*(.+?):\s*\$?([\d,]+(?:\.\d{2})?)\s*SGD\*\*([\s\S]*?)(?=(?:⭐|👑|All prices|Would you like|$))/i)
+  console.log('🌟 Standard match:', standardMatch ? 'FOUND' : 'NOT FOUND', standardMatch?.[1], standardMatch?.[2])
+  if (standardMatch) {
+    const coverageText = standardMatch[3]
+    plans.push({
+      name: 'Standard Plan',
+      emoji: '🌟',
+      price: parseFloat(standardMatch[2].replace(/,/g, '')),
+      coverage: parseCoverage(coverageText),
+      recommended: standardMatch[1].toLowerCase().includes('recommended')
+    })
+  }
+  
+  // Parse Elite Plan (⭐) - Try multiple patterns for flexibility
+  // Pattern 1: Standard format with optional recommendation text
+  let eliteMatch = text.match(/⭐\s*\*\*(.+?):\s*\$?([\d,]+(?:\.\d{2})?)\s*SGD\*\*([\s\S]*?)(?=(?:👑|All prices|Would you like|$))/i)
+  
+  // Pattern 2: If no match, try without SGD inside bold
+  if (!eliteMatch) {
+    eliteMatch = text.match(/⭐\s*\*\*(.+?):\s*\$?([\d,]+(?:\.\d{2})?)\s*\*\*\s*SGD([\s\S]*?)(?=(?:👑|All prices|Would you like|$))/i)
+  }
+  
+  // Pattern 3: Try matching just "Elite Plan" text
+  if (!eliteMatch) {
+    eliteMatch = text.match(/⭐\s*\*\*Elite Plan[^:]*:\s*\$?([\d,]+(?:\.\d{2})?)[^*]*\*\*([\s\S]*?)(?=(?:👑|All prices|Would you like|$))/i)
+    if (eliteMatch) {
+      // Adjust capture groups for pattern 3
+      eliteMatch = [eliteMatch[0], 'Elite Plan', eliteMatch[1], eliteMatch[2]] as any
+    }
+  }
+  
+  console.log('⭐ Elite match:', eliteMatch ? 'FOUND' : 'NOT FOUND', eliteMatch?.[1], eliteMatch?.[2])
+  if (eliteMatch) {
+    const coverageText = eliteMatch[3] || eliteMatch[2] || ''
+    const price = parseFloat((eliteMatch[2] || eliteMatch[1] || '0').replace(/,/g, ''))
+    plans.push({
+      name: 'Elite Plan',
+      emoji: '⭐',
+      price: price,
+      coverage: parseCoverage(coverageText),
+      recommended: (eliteMatch[1] || '').toLowerCase().includes('recommended')
+    })
+  }
+  
+  // Parse Premier Plan (👑)
+  const premierMatch = text.match(/👑\s*\*\*(.+?):\s*\$?([\d,]+(?:\.\d{2})?)\s*SGD\*\*([\s\S]*?)(?=(?:All prices|Would you like|$))/i)
+  console.log('👑 Premier match:', premierMatch ? 'FOUND' : 'NOT FOUND', premierMatch?.[1], premierMatch?.[2])
+  if (premierMatch) {
+    const coverageText = premierMatch[3]
+    plans.push({
+      name: 'Premier Plan',
+      emoji: '👑',
+      price: parseFloat(premierMatch[2].replace(/,/g, '')),
+      coverage: parseCoverage(coverageText),
+      recommended: premierMatch[1].toLowerCase().includes('recommended')
+    })
+  }
+  
+  console.log('✅ Total plans parsed:', plans.length, plans.map(p => p.name))
+  
+  // Even if we only found one plan, return it so it can be rendered as a card
+  return plans.length > 0 ? plans : null
+}
+
+function parseCoverage(text: string) {
+  const coverage: any = {}
+  
+  // Parse medical coverage
+  const medicalMatch = text.match(/Medical coverage:\s*\$?([\d,]+)/i)
+  if (medicalMatch) {
+    coverage.medical_coverage = parseFloat(medicalMatch[1].replace(/,/g, ''))
+  }
+  
+  // Parse trip cancellation
+  const tripMatch = text.match(/Trip cancellation:\s*\$?([\d,]+)/i)
+  if (tripMatch) {
+    coverage.trip_cancellation = parseFloat(tripMatch[1].replace(/,/g, ''))
+  }
+  
+  // Parse baggage protection/loss
+  const baggageMatch = text.match(/Baggage (?:protection|loss):\s*\$?([\d,]+)/i)
+  if (baggageMatch) {
+    coverage.baggage_loss = parseFloat(baggageMatch[1].replace(/,/g, ''))
+  }
+  
+  // Parse personal accident
+  const accidentMatch = text.match(/Personal accident:\s*\$?([\d,]+)/i)
+  if (accidentMatch) {
+    coverage.personal_accident = parseFloat(accidentMatch[1].replace(/,/g, ''))
+  }
+  
+  // Parse adventure sports
+  if (text.match(/Adventure sports/i)) {
+    coverage.adventure_sports = true
+  }
+  
+  // Parse emergency evacuation
+  const evacuationMatch = text.match(/Emergency evacuation:\s*\$?([\d,]+)/i)
+  if (evacuationMatch) {
+    coverage.emergency_evacuation = parseFloat(evacuationMatch[1].replace(/,/g, ''))
+  }
+  
+  return coverage
+}
+
+// Component to render message content with clickable URLs and proper formatting
 function MessageContent({ content }: { content: string }) {
+  // Debug: Log what we're trying to render
+  if (content.includes('🌟') || content.includes('⭐') || content.includes('👑')) {
+    console.log('🎯 MessageContent received plan content:', content.length, 'chars')
+    console.log('🎯 Content preview:', content.substring(0, 300))
+  }
+  
+  // Check for plan cards first
+  const planCards = parsePlanCards(content)
+  if (planCards) {
+    console.log('✅ Rendering plan cards:', planCards.length, 'plans')
+    // Extract intro text (before the first plan emoji)
+    const introMatch = content.match(/^([\s\S]*?)(?=🌟|⭐|👑)/i)
+    const introText = introMatch ? introMatch[1].trim() : ''
+    
+    // Extract outro text (after the last plan and "All prices..." line)
+    const outroMatch = content.match(/(?:All prices[\s\S]*?SGD\.\s*)([\s\S]*?)$/i)
+    const outroText = outroMatch ? outroMatch[1].trim() : ''
+    
+    return (
+      <div className="space-y-3">
+        {introText && (
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{parseMarkdownBold(introText)}</p>
+        )}
+        <PlanComparisonCard plans={planCards} />
+        {outroText && (
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{parseMarkdownBold(outroText)}</p>
+        )}
+      </div>
+    )
+  }
+  
   const stripeCheckoutUrl = extractStripeCheckoutUrl(content)
   const allUrls = extractUrls(content)
   
@@ -96,7 +296,7 @@ function MessageContent({ content }: { content: string }) {
       <div className="space-y-3">
         {/* Render text before URL */}
         {parts[0] && parts[0].trim() && (
-          <p className="text-sm leading-relaxed whitespace-pre-wrap">{parts[0]}</p>
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{parseMarkdownBold(parts[0])}</p>
         )}
         {/* Stripe checkout button */}
         <a
@@ -110,13 +310,13 @@ function MessageContent({ content }: { content: string }) {
         </a>
         {/* Render text after URL */}
         {parts[1] && parts[1].trim() && (
-          <p className="text-sm leading-relaxed whitespace-pre-wrap">{parts[1]}</p>
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{parseMarkdownBold(parts[1])}</p>
         )}
       </div>
     )
   }
   
-  // Render regular content with clickable URLs
+  // Render regular content with clickable URLs and bold formatting
   if (allUrls.length > 0) {
     const parts = content.split(/(https?:\/\/[^\s\)]+)/gi)
     return (
@@ -135,14 +335,15 @@ function MessageContent({ content }: { content: string }) {
               </a>
             )
           }
-          return <span key={index}>{part}</span>
+          // Parse markdown bold in non-URL parts
+          return <span key={index}>{parseMarkdownBold(part)}</span>
         })}
       </p>
     )
   }
   
-  // No URLs, render plain text
-  return <p className="text-sm leading-relaxed whitespace-pre-wrap">{content}</p>
+  // No URLs, render text with bold formatting
+  return <p className="text-sm leading-relaxed whitespace-pre-wrap">{parseMarkdownBold(content)}</p>
 }
 
 export default function QuotePage() {
@@ -322,50 +523,67 @@ export default function QuotePage() {
         // Check if there's document_data in state that we can attach to messages
         const documentData = data.state?.document_data || []
         
-        const transformedMessages = data.messages.map((msg: any, idx: number) => {
-          const message: Message = {
-            id: `${idx}`,
-            role: msg.role,
-            content: msg.content,
-            timestamp: new Date()
-          }
-          
-          // If this is an assistant message, check if it follows a document upload
-          if (msg.role === 'assistant' && documentData.length > 0) {
-            // Check if previous message was a document upload
-            const prevMsg = idx > 0 ? data.messages[idx - 1] : null
-            const isAfterDocumentUpload = prevMsg && 
-              prevMsg.role === 'user' && 
-              (prevMsg.content?.includes('[User uploaded a document') || 
-               prevMsg.content?.toLowerCase().includes('uploaded a document'))
+        const transformedMessages: Message[] = []
+        
+        data.messages.forEach((msg: any, idx: number) => {
+          // For assistant messages, split into paragraphs for better readability
+          if (msg.role === 'assistant' && msg.content) {
+            const paragraphs = splitIntoParagraphs(msg.content)
             
-            // Also check if this message mentions extracted details (e.g., "I've extracted", "extracted information")
-            const mentionsExtraction = msg.content && (
-              msg.content.includes('extracted') ||
-              msg.content.includes('extraction') ||
-              msg.content.includes('I\'ve extracted') ||
-              msg.content.includes('extracted the following')
-            )
-            
-            // Attach extractedData if this message is about document extraction
-            if (isAfterDocumentUpload || mentionsExtraction) {
-              // Find the most recent document that matches
-              // Try to match by checking if message mentions the filename or use latest
-              const latestDoc = documentData[documentData.length - 1]
-              if (latestDoc?.extracted_json) {
-                message.extractedData = latestDoc.extracted_json
-                console.log('🔍 [DEBUG] Attached extractedData to assistant message:', {
-                  messageIndex: idx,
-                  isAfterDocumentUpload,
-                  mentionsExtraction,
-                  extractedData: latestDoc.extracted_json
-                })
+            paragraphs.forEach((paragraph, pIdx) => {
+              const message: Message = {
+                id: `${idx}-${pIdx}`,
+                role: msg.role,
+                content: paragraph,
+                timestamp: new Date()
               }
+              
+              // If this is an assistant message, check if it follows a document upload
+              if (documentData.length > 0) {
+                // Check if previous message was a document upload
+                const prevMsg = idx > 0 ? data.messages[idx - 1] : null
+                const isAfterDocumentUpload = prevMsg && 
+                  prevMsg.role === 'user' && 
+                  (prevMsg.content?.includes('[User uploaded a document') || 
+                   prevMsg.content?.toLowerCase().includes('uploaded a document'))
+                
+                // Also check if this message mentions extracted details
+                const mentionsExtraction = paragraph && (
+                  paragraph.includes('extracted') ||
+                  paragraph.includes('extraction') ||
+                  paragraph.includes('I\'ve extracted') ||
+                  paragraph.includes('extracted the following')
+                )
+                
+                // Attach extractedData only to the first paragraph if relevant
+                if (pIdx === 0 && (isAfterDocumentUpload || mentionsExtraction)) {
+                  const latestDoc = documentData[documentData.length - 1]
+                  if (latestDoc?.extracted_json) {
+                    message.extractedData = latestDoc.extracted_json
+                    console.log('🔍 [DEBUG] Attached extractedData to assistant message:', {
+                      messageIndex: idx,
+                      isAfterDocumentUpload,
+                      mentionsExtraction,
+                      extractedData: latestDoc.extracted_json
+                    })
+                  }
+                }
+              }
+              
+              transformedMessages.push(message)
+            })
+          } else {
+            // User messages - don't split
+            const message: Message = {
+              id: `${idx}`,
+              role: msg.role,
+              content: msg.content,
+              timestamp: new Date()
             }
+            transformedMessages.push(message)
           }
-          
-          return message
         })
+        
         setMessages(transformedMessages)
       }
 
@@ -678,17 +896,42 @@ export default function QuotePage() {
 
       const data = await messageResponse.json()
 
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: data.message,
-        timestamp: new Date()
-      }
+      console.log('📨 Received message from backend:', {
+        length: data.message.length,
+        hasPlanEmojis: ['🌟', '⭐', '👑'].some(e => data.message.includes(e)),
+        preview: data.message.substring(0, 200)
+      })
 
-      setMessages(prev => [...prev, assistantMessage])
+      // Split the response into paragraphs for better readability
+      const paragraphs = splitIntoParagraphs(data.message)
       
-      // Store last AI response for voice playback
+      console.log('📋 After splitIntoParagraphs:', {
+        originalLength: data.message.length,
+        paragraphCount: paragraphs.length,
+        firstParagraphLength: paragraphs[0]?.length,
+        firstParagraphPreview: paragraphs[0]?.substring(0, 100)
+      })
+      
+      // Store last AI response for voice playback (full text)
       lastAIResponseRef.current = data.message
+
+      // Add messages with a small delay between each paragraph for visual clarity
+      for (let i = 0; i < paragraphs.length; i++) {
+        const paragraph = paragraphs[i]
+        const assistantMessage: Message = {
+          id: `${Date.now()}-${i}`,
+          role: 'assistant',
+          content: paragraph,
+          timestamp: new Date()
+        }
+
+        // Add delay between paragraphs (except for the first one)
+        if (i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 300))
+        }
+
+        setMessages(prev => [...prev, assistantMessage])
+      }
 
       // Note: Stripe checkout URL will be rendered as a button in MessageContent component
       // No auto-redirect - user clicks the button to open in new tab

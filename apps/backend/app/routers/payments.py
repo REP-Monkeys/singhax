@@ -330,7 +330,10 @@ async def create_checkout_session(
             db=db
         )
 
-        logger.info(f"Created checkout session for user {current_user.id}, tier {selected_tier}")
+        logger.info(f"✅ Created checkout session for user {current_user.id}, tier {selected_tier}")
+        logger.info(f"💳 Checkout URL: {checkout_session.url}")
+        logger.info(f"💳 Session ID: {checkout_session.id}")
+        logger.info(f"💳 Session expires at: {checkout_session.expires_at}")
 
         return CreateCheckoutResponse(
             checkout_url=checkout_session.url,
