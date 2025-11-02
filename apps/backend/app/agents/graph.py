@@ -893,14 +893,75 @@ def create_conversation_graph(db) -> StateGraph:
                     # Date parsing failed - will ask for clarification below
                     print(f"   ⚠️  Failed to parse return_date: {extracted.get('return_date')}")
             
+            # FALLBACK: Parse travelers ages from user input if LLM didn't extract
+            if "travelers_ages" not in extracted and current_q == "travelers":
+                import re
+                user_lower = user_input.lower()
+                
+                # Pattern 1: "just me, 21 years old" or "just me 21"
+                if any(phrase in user_lower for phrase in ["just me", "only me", "i'm", "i am"]):
+                    # Extract age from patterns like "21 years old" or "age 21" or just "21"
+                    age_matches = re.findall(r'\b(\d{1,3})\s*(?:years?\s*old|yrs?\s*old|yo|age)?\b', user_input, re.IGNORECASE)
+                    if age_matches:
+                        age = int(age_matches[0])
+                        if 1 <= age <= 110:
+                            extracted["travelers_ages"] = [age]
+                            print(f"   🔧 Fallback: Extracted single traveler age {age} from 'just me' pattern")
+                
+                # Pattern 2: "1 traveler, 21 years old" or "1 traveller age 25"
+                elif re.search(r'\b1\s*trav[e]?l+[e]?r', user_lower):
+                    age_matches = re.findall(r'\b(\d{1,3})\s*(?:years?\s*old|yrs?\s*old|yo|age)?\b', user_input, re.IGNORECASE)
+                    if age_matches:
+                        age = int(age_matches[0])
+                        if 1 <= age <= 110:
+                            extracted["travelers_ages"] = [age]
+                            print(f"   🔧 Fallback: Extracted single traveler age {age} from '1 traveler' pattern")
+                
+                # Pattern 3: "2 travelers, ages 30 and 25" or "2 people ages 30, 25"
+                elif re.search(r'\b(\d+)\s*(?:trav[e]?l+[e]?rs?|people|persons?)', user_lower):
+                    age_matches = re.findall(r'\b(\d{1,3})\s*(?:years?\s*old|yrs?\s*old|yo)?\b', user_input, re.IGNORECASE)
+                    if age_matches:
+                        ages = [int(age) for age in age_matches if 1 <= int(age) <= 110]
+                        if ages:
+                            extracted["travelers_ages"] = ages
+                            print(f"   🔧 Fallback: Extracted multiple traveler ages {ages}")
+                
+                # Pattern 4: Just ages mentioned "30 and 25" or "age 21"
+                elif "age" in user_lower or re.search(r'\b\d{1,2}\s*(?:years?\s*old|yo)\b', user_lower):
+                    age_matches = re.findall(r'\b(\d{1,3})\s*(?:years?\s*old|yrs?\s*old|yo)?\b', user_input, re.IGNORECASE)
+                    if age_matches:
+                        ages = [int(age) for age in age_matches if 1 <= int(age) <= 110]
+                        if ages:
+                            extracted["travelers_ages"] = ages
+                            print(f"   🔧 Fallback: Extracted ages {ages} from age mentions")
+            
             if "travelers_ages" in extracted:
-                # Validate ages are integers in valid range
-                valid_ages = [age for age in extracted["travelers_ages"] if isinstance(age, int) and 0.08 <= age <= 110]
+                # Normalize and validate ages - handle both arrays and single values
+                travelers_input = extracted["travelers_ages"]
+                
+                # Handle single value (convert to list)
+                if not isinstance(travelers_input, list):
+                    travelers_input = [travelers_input]
+                
+                # Validate and convert ages to integers
+                valid_ages = []
+                for age in travelers_input:
+                    try:
+                        # Convert to float first (handles "21" or "21.0"), then to int
+                        age_num = int(float(age))
+                        if 1 <= age_num <= 110:  # Changed from 0.08 to 1 for clearer validation
+                            valid_ages.append(age_num)
+                        else:
+                            print(f"   ⚠️  Age {age_num} out of valid range (1-110)")
+                    except (ValueError, TypeError) as e:
+                        print(f"   ⚠️  Could not convert age '{age}' to integer: {e}")
+                
                 if valid_ages:
                     travelers["ages"] = valid_ages
                     travelers["count"] = len(valid_ages)
                     if current_q == "travelers":
                         extracted_info = True
+                    print(f"   ✅ Extracted travelers ages: {valid_ages}")
                     
                     # Automatically calculate adults_count and children_count
                     adults_count = sum(1 for age in valid_ages if age >= 18)
