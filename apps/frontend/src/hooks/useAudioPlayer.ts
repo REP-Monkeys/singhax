@@ -41,27 +41,50 @@ export function useAudioPlayer(): UseAudioPlayerReturn {
 
   const play = useCallback(async (audioUrl: string) => {
     try {
+      console.log('🎵 [useAudioPlayer] Starting playback...')
+      console.log('   Audio URL:', audioUrl.substring(0, 50) + '...')
       setError(null)
       
       // Stop current audio if playing
       if (audioRef.current) {
+        console.log('   Stopping previous audio')
         audioRef.current.pause()
         audioRef.current = null
       }
       
       // Revoke old URL
       if (urlRef.current) {
+        console.log('   Revoking old URL')
         URL.revokeObjectURL(urlRef.current)
       }
       
       // Create new audio element
+      console.log('   Creating new Audio element')
       const audio = new Audio(audioUrl)
       audioRef.current = audio
       urlRef.current = audioUrl
       
+      // Add detailed logging
+      audio.onloadstart = () => {
+        console.log('   📥 Audio loading started')
+      }
+      
+      audio.onloadeddata = () => {
+        console.log('   ✅ Audio data loaded')
+      }
+      
       // Event listeners
       audio.onloadedmetadata = () => {
+        console.log(`   📊 Audio metadata loaded: duration=${audio.duration}s`)
         setDuration(audio.duration)
+      }
+      
+      audio.oncanplay = () => {
+        console.log('   ✅ Audio can play (buffered enough)')
+      }
+      
+      audio.oncanplaythrough = () => {
+        console.log('   ✅ Audio can play through (fully buffered)')
       }
       
       audio.ontimeupdate = () => {
@@ -85,19 +108,35 @@ export function useAudioPlayer(): UseAudioPlayerReturn {
       }
       
       audio.onerror = (e) => {
-        console.error('Audio playback error:', e)
+        console.error('❌ Audio playback error:', e)
+        console.error('   Audio error code:', audio.error?.code)
+        console.error('   Audio error message:', audio.error?.message)
+        console.error('   Audio src:', audio.src?.substring(0, 100))
         setError('Failed to play audio. Please try again.')
         setIsPlaying(false)
       }
       
       // Play audio
-      await audio.play()
+      console.log('   🎬 Calling audio.play()')
+      const playPromise = audio.play()
+      
+      await playPromise
+      console.log('   ✅ audio.play() promise resolved')
       
     } catch (err) {
-      console.error('Audio play error:', err)
+      console.error('❌ Audio play error:', err)
       
-      if (err instanceof Error && err.name === 'NotAllowedError') {
-        setError('Browser blocked audio playback. Please interact with the page first.')
+      if (err instanceof Error) {
+        console.error('   Error name:', err.name)
+        console.error('   Error message:', err.message)
+        
+        if (err.name === 'NotAllowedError') {
+          setError('Browser blocked audio playback. Please interact with the page first.')
+        } else if (err.name === 'NotSupportedError') {
+          setError('Audio format not supported by browser.')
+        } else {
+          setError(`Could not play audio: ${err.message}`)
+        }
       } else {
         setError('Could not play audio. Please try again.')
       }

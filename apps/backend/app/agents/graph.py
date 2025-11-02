@@ -403,6 +403,40 @@ def create_conversation_graph(db) -> StateGraph:
                 # Otherwise return empty extraction
                 extracted = {}
 
+            # CRITICAL: Check for impossible destination-activity combinations EARLY
+            # This catches cases where user mentions impossible activities in their first message
+            user_input_lower = user_input.lower().strip()
+            if "destination" in extracted and extracted.get("destination"):
+                dest_lower = extracted["destination"].lower()
+                
+                # Check for impossible combinations EARLY
+                is_impossible = False
+                impossibility_msg = ""
+                
+                # Check for diving in landlocked countries
+                landlocked = ["nepal", "switzerland", "austria", "bolivia", "mongolia", "laos", "tibet",
+                             "afghanistan", "bhutan", "czech", "hungary", "slovakia", "zambia", "zimbabwe"]
+                water_sports = ["scuba", "diving", "snorkel", "surf", "jet ski", "parasailing", "water ski"]
+                
+                if any(country in dest_lower for country in landlocked) and any(sport in user_input_lower for sport in water_sports):
+                    is_impossible = True
+                    impossibility_msg = f"🤔 Hmm, I noticed you mentioned water/diving activities, but {extracted['destination']} is a landlocked country without ocean access. Did you mean a different activity like trekking or hiking instead? I'll proceed without adventure sports coverage for now."
+                
+                # Check for snow sports in tropical countries
+                tropical = ["thailand", "phuket", "bali", "philippines", "singapore", "indonesia", "malaysia", 
+                           "vietnam", "cambodia", "myanmar", "fiji", "maldives", "sri lanka", "india", "goa", "dubai", "uae"]
+                snow_sports = ["skiing", "snowboard", "snow", "ski", "alpine", "winter sport"]
+                
+                if any(country in dest_lower for country in tropical) and any(sport in user_input_lower for sport in snow_sports):
+                    is_impossible = True
+                    impossibility_msg = f"🤔 Hmm, I noticed you mentioned skiing/snow sports, but {extracted['destination']} is a tropical destination without snow. Did you mean water skiing or another activity? I'll proceed without adventure sports coverage for now."
+                
+                if is_impossible:
+                    # Set adventure_sports to False and store the warning message
+                    extracted["adventure_sports"] = False
+                    state["_impossibility_detected"] = impossibility_msg
+                    print(f"   ⚠️  EARLY IMPOSSIBILITY DETECTED: {impossibility_msg}")
+            
             # CRITICAL: Check if document data was uploaded and merge it
             document_data = state.get("document_data", [])
             if document_data:
@@ -558,9 +592,13 @@ def create_conversation_graph(db) -> StateGraph:
                     print(f"   ⏭️  Skipping extraction - user confirmed existing value after explicit confirmation question")
             
             # FALLBACK: If LLM didn't extract destination, check for common country keywords
-            # This should run even on first message (when current_q is not set yet)
-            if "destination" not in extracted and not trip.get("destination"):
-                user_lower = user_input.lower()
+            # This should run: 1) on first message, OR 2) when user is changing destination
+            user_lower = user_input.lower()
+            
+            # Check for correction keywords
+            is_correction = any(word in user_lower for word in ["actually", "instead", "change", "i mean", "correction", "no wait", "sorry"])
+            
+            if "destination" not in extracted and (not trip.get("destination") or is_correction):
                 # Common destination keywords (case-insensitive)
                 destination_keywords = {
                     "thailand": "Thailand", "thai": "Thailand", "phuket": "Thailand", "bangkok": "Bangkok, Thailand",
@@ -583,7 +621,10 @@ def create_conversation_graph(db) -> StateGraph:
                 for keyword, country in destination_keywords.items():
                     if keyword in user_lower:
                         extracted["destination"] = country
-                        print(f"   🔧 Fallback: Extracted destination '{country}' from keyword '{keyword}'")
+                        if trip.get("destination"):
+                            print(f"   🔧 Fallback: User correcting destination from '{trip.get('destination')}' to '{country}'")
+                        else:
+                            print(f"   🔧 Fallback: Extracted destination '{country}' from keyword '{keyword}'")
                         break
             
             # FALLBACK: Always validate departure_date with dateutil
@@ -689,12 +730,25 @@ def create_conversation_graph(db) -> StateGraph:
                 else:
                     extracted.pop("return_date", None)  # Remove invalid extraction
             
-            if "destination" in extracted and not trip.get("destination"):
-                trip["destination"] = extracted["destination"]
-                print(f"   ✅ Extracted destination: {extracted['destination']}")
-                # Mark as extracted even if current_q is not set (first message case)
-                if current_q == "destination" or not current_q:
-                    extracted_info = True
+            if "destination" in extracted:
+                # Check if this is a new destination or a correction
+                is_new_dest = not trip.get("destination")
+                is_correction = trip.get("destination") and trip["destination"] != extracted["destination"]
+                
+                if is_new_dest or is_correction:
+                    old_dest = trip.get("destination")
+                    trip["destination"] = extracted["destination"]
+                    
+                    if is_correction:
+                        print(f"   ✅ Corrected destination: {old_dest} → {extracted['destination']}")
+                        # Clear current question since user is making corrections
+                        state["current_question"] = ""
+                        extracted_info = True
+                    else:
+                        print(f"   ✅ Extracted destination: {extracted['destination']}")
+                        # Mark as extracted even if current_q is not set (first message case)
+                        if current_q == "destination" or not current_q:
+                            extracted_info = True
                 
                 # Automatically derive arrival_country from destination
                 try:
@@ -754,6 +808,16 @@ def create_conversation_graph(db) -> StateGraph:
                             print(f"   ✅ Updated existing trip: {existing_trip.id}")
                     except Exception as e:
                         print(f"   ⚠️  Failed to create/update trip: {e}")
+                elif is_correction and state.get("trip_id"):
+                    # Update existing trip when destination is corrected
+                    try:
+                        existing_trip = db.query(Trip).filter(Trip.id == uuid.UUID(state["trip_id"])).first()
+                        if existing_trip:
+                            existing_trip.destinations = [extracted["destination"]]
+                            db.commit()
+                            print(f"   ✅ Updated trip destination to: {extracted['destination']}")
+                    except Exception as e:
+                        print(f"   ⚠️  Failed to update trip destination: {e}")
 
             if "departure_date" in extracted:
                 # Parse to date object with error handling
@@ -1124,6 +1188,14 @@ def create_conversation_graph(db) -> StateGraph:
                 )
                 state["current_question"] = "destination"  # CRITICAL: Set question to prevent loop
                 print(f"   💬 Asking: {response}")
+                
+                # Check if there's an impossibility message to show BEFORE early return
+                if state.get("_impossibility_detected"):
+                    impossibility_msg = state["_impossibility_detected"]
+                    response = f"{impossibility_msg}\n\n{response}"
+                    state["_impossibility_detected"] = None  # Clear after showing
+                    print(f"   💬 Prepending impossibility message (early return)")
+                
                 state["messages"].append(AIMessage(content=response))
                 return state
             
@@ -1282,6 +1354,14 @@ def create_conversation_graph(db) -> StateGraph:
                                 llm_client=llm_client,
                                 use_llm=settings.use_llm_questions
                             )
+                            
+                            # Check if there's an impossibility message to show BEFORE early return
+                            if state.get("_impossibility_detected"):
+                                impossibility_msg = state["_impossibility_detected"]
+                                response = f"{impossibility_msg}\n\n{response}"
+                                state["_impossibility_detected"] = None  # Clear after showing
+                                print(f"   💬 Prepending impossibility message (early return)")
+                            
                             state["messages"].append(AIMessage(content=response))
                             return state
                         else:
@@ -1290,6 +1370,14 @@ def create_conversation_graph(db) -> StateGraph:
                             state["_ready_for_pricing"] = True
                             print(f"   ✅ All required info present - ready for pricing")
                             response = "Great! Let me calculate your insurance options..."
+                            
+                            # Check if there's an impossibility message to show BEFORE early return
+                            if state.get("_impossibility_detected"):
+                                impossibility_msg = state["_impossibility_detected"]
+                                response = f"{impossibility_msg}\n\n{response}"
+                                state["_impossibility_detected"] = None  # Clear after showing
+                                print(f"   💬 Prepending impossibility message (early return)")
+                            
                             state["messages"].append(AIMessage(content=response))
                             return state  # Return early - routing will handle going to pricing
                     else:
@@ -1323,11 +1411,27 @@ def create_conversation_graph(db) -> StateGraph:
                     state["awaiting_confirmation"] = False
                     state["current_question"] = ""  # Clear to ask for corrections
                     response = "No problem! What would you like to correct?"
+                    
+                    # Check if there's an impossibility message to show BEFORE early return
+                    if state.get("_impossibility_detected"):
+                        impossibility_msg = state["_impossibility_detected"]
+                        response = f"{impossibility_msg}\n\n{response}"
+                        state["_impossibility_detected"] = None  # Clear after showing
+                        print(f"   💬 Prepending impossibility message (early return)")
+                    
                     state["messages"].append(AIMessage(content=response))
                     return state
                 else:
                     # User didn't clearly say yes or no
                     response = "I didn't catch that. Is the information above correct? (yes/no)"
+                    
+                    # Check if there's an impossibility message to show BEFORE early return
+                    if state.get("_impossibility_detected"):
+                        impossibility_msg = state["_impossibility_detected"]
+                        response = f"{impossibility_msg}\n\n{response}"
+                        state["_impossibility_detected"] = None  # Clear after showing
+                        print(f"   💬 Prepending impossibility message (early return)")
+                    
                     state["messages"].append(AIMessage(content=response))
                     return state
             
@@ -1381,6 +1485,14 @@ def create_conversation_graph(db) -> StateGraph:
                     # Can't format dates, skip confirmation for now
                     response = "I need your travel dates to proceed. When are you traveling?"
                     state["current_question"] = "departure_date"
+                    
+                    # Check if there's an impossibility message to show BEFORE early return
+                    if state.get("_impossibility_detected"):
+                        impossibility_msg = state["_impossibility_detected"]
+                        response = f"{impossibility_msg}\n\n{response}"
+                        state["_impossibility_detected"] = None  # Clear after showing
+                        print(f"   💬 Prepending impossibility message (early return)")
+                    
                     state["messages"].append(AIMessage(content=response))
                     return state
 
@@ -2046,9 +2158,41 @@ def create_conversation_graph(db) -> StateGraph:
                 trip_details = state.get("trip_details", {})
                 travelers_data = state.get("travelers_data", {})
                 
+                # If trip_id is missing, create it now to prevent infinite loop
+                if not trip_id and user_id and trip_details.get("destination"):
+                    try:
+                        from app.models.trip import Trip
+                        session_id = state.get("session_id")
+                        
+                        # Check if trip already exists for this session
+                        existing_trip = db.query(Trip).filter(Trip.session_id == session_id).first()
+                        if existing_trip:
+                            trip_id = str(existing_trip.id)
+                            state["trip_id"] = trip_id
+                            print(f"   ✅ Found existing trip: {trip_id}")
+                        else:
+                            # Create new trip
+                            new_trip = Trip(
+                                user_id=uuid.UUID(user_id),
+                                session_id=session_id,
+                                status="draft",
+                                destinations=[trip_details.get("destination")],
+                                start_date=trip_details.get("departure_date"),
+                                end_date=trip_details.get("return_date"),
+                                travelers_count=travelers_data.get("count", 1)
+                            )
+                            db.add(new_trip)
+                            db.commit()
+                            db.refresh(new_trip)
+                            trip_id = str(new_trip.id)
+                            state["trip_id"] = trip_id
+                            print(f"   ✅ Created trip: {trip_id}")
+                    except Exception as e:
+                        print(f"   ⚠️  Failed to create trip: {e}")
+                
                 if not user_id or not trip_id:
-                    response = "I need to save your quote first. Let me do that..."
-                    # TODO: Could create quote here if needed
+                    response = "I'm having trouble processing your payment. Please contact support."
+                    state["requires_human"] = True
                     state["messages"].append(AIMessage(content=response))
                     return state
                 

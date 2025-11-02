@@ -2,7 +2,7 @@
  * Voice API client for transcription and synthesis.
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 
 export interface TranscribeResponse {
   success: boolean
@@ -72,7 +72,11 @@ export async function synthesizeSpeech(
   token: string,
   voiceId?: string
 ): Promise<string> {
-  const response = await fetch(`${API_URL}/voice/synthesize`, {
+  const url = `${API_URL}/voice/synthesize`
+  console.log(`🔊 [voiceApi] TTS request to: ${url}`)
+  console.log(`   Text length: ${text.length} chars`)
+  
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -81,16 +85,21 @@ export async function synthesizeSpeech(
     body: JSON.stringify({ text, voice_id: voiceId }),
   })
   
+  console.log(`📡 [voiceApi] TTS Response status: ${response.status}`)
+  
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Speech synthesis failed' }))
+    console.error(`❌ [voiceApi] TTS error:`, error)
     throw new Error(error.detail || 'Failed to generate speech')
   }
   
   // Get audio blob
   const audioBlob = await response.blob()
+  console.log(`📦 [voiceApi] Audio blob received: ${audioBlob.size} bytes, type: ${audioBlob.type}`)
   
   // Create object URL
   const audioUrl = URL.createObjectURL(audioBlob)
+  console.log(`✅ [voiceApi] Created audio URL: ${audioUrl.substring(0, 50)}...`)
   
   return audioUrl
 }
