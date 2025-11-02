@@ -99,7 +99,8 @@ class PaymentService:
         amount: int,
         product_name: str,
         user_email: str,
-        db: Session
+        db: Session,
+        chat_session_id: Optional[str] = None
     ) -> stripe.checkout.Session:
         """
         Create a Stripe checkout session.
@@ -110,12 +111,22 @@ class PaymentService:
             product_name: Product name for Stripe
             user_email: User email for Stripe
             db: Database session
+            chat_session_id: Optional chat session ID to include in redirect URLs
             
         Returns:
             Stripe checkout session object
         """
         if not settings.stripe_secret_key:
             raise ValueError("Stripe secret key not configured")
+        
+        # Build success and cancel URLs with chat session ID
+        success_url = settings.payment_success_url
+        cancel_url = settings.payment_cancel_url
+        
+        if chat_session_id:
+            # Append chat session ID to both URLs
+            success_url += f"&session={chat_session_id}"
+            cancel_url += f"&session={chat_session_id}"
         
         # Create checkout session (following reference pattern)
         try:
@@ -133,8 +144,8 @@ class PaymentService:
                     'quantity': 1,
                 }],
                 mode='payment',
-                success_url=settings.payment_success_url,
-                cancel_url=settings.payment_cancel_url,
+                success_url=success_url,
+                cancel_url=cancel_url,
                 client_reference_id=payment_intent_id,  # CRITICAL: Links Stripe to our DB
                 customer_email=user_email,
                 expires_at=int(time.time()) + 3600,  # Explicit 1 hour expiration

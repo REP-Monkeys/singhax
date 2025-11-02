@@ -327,7 +327,8 @@ async def create_checkout_session(
             amount=amount_cents,
             product_name=f"Travel Insurance - {selected_tier.title()} Plan",
             user_email=current_user.email,
-            db=db
+            db=db,
+            chat_session_id=request.session_id  # Pass chat session ID for redirect
         )
 
         logger.info(f"✅ Created checkout session for user {current_user.id}, tier {selected_tier}")
