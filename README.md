@@ -1,4 +1,4 @@
-# ConvoTravelInsure
+# TripMate
 
 A conversational travel insurance platform that provides AI-powered quoting, policy explanation, and claims guidance through natural language interaction.
 
