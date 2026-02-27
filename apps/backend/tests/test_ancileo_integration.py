@@ -475,3 +475,7 @@ class TestAdapterFallbackBehavior:
         assert "error" in result["breakdown"]
         assert result["tiers"] == {}
 
+
+
+
+

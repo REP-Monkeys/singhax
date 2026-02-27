@@ -465,3 +465,7 @@ class AncileoAdapter(InsurerAdapter):
         
         return requirements.get(claim_type, {})
 
+
+
+
+
